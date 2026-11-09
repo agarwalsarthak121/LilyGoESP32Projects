@@ -21,6 +21,7 @@
 #   NEWS_COUNT="10"       (how many top headlines to cycle through)
 #   NEWS_SECONDS="6"      (how long each headline stays up)
 #   NEWS_PER_VISIT="10"   (headlines shown before auto-rotate moves on; "2" = short visits)
+#   THEME="aura"          (a different style per screen; "classic" = the original grey look)
 #   NIGHT_HOURS="23-7"    (dark, dim clock only at night; "" turns night mode off)
 #   DAY_BRIGHTNESS="0.6"  NIGHT_BRIGHTNESS="0.05"
 #
@@ -72,6 +73,21 @@ CRIC_API = "https://api.cricapi.com/v1/"
 RSS_URL = "https://static.cricinfo.com/rss/livescores.xml"
 LOGIN_PORT = 8080
 
+# look: "aura" (default, a different style per screen) or "classic" (the original grey).
+# A choice made on the board's web page is kept in NVM and wins over settings.toml.
+THEMES = ("aura", "classic")
+THEME = (os.getenv("THEME") or "aura").strip().lower()
+THEME_FROM_WEB = False
+try:
+    if microcontroller.nvm[0] in (1, 2):
+        THEME = THEMES[microcontroller.nvm[0] - 1]
+        THEME_FROM_WEB = True
+except Exception:  # noqa: BLE001 - no NVM on this build
+    pass
+if THEME not in THEMES:
+    THEME = "aura"
+CLASSIC = THEME == "classic"
+
 WEATHER_EVERY = 10 * 60
 AIR_EVERY = 30 * 60
 NTP_EVERY = 6 * 60 * 60
@@ -82,7 +98,7 @@ KITE_EVERY_CLOSED = 15 * 60   # outside market hours
 WEATHER_URL = (
     "https://api.open-meteo.com/v1/forecast?latitude=" + LAT + "&longitude=" + LON
     + "&current=temperature_2m,relative_humidity_2m,pressure_msl,wind_speed_10m,"
-    "weather_code,apparent_temperature"
+    "weather_code,apparent_temperature,is_day"
     "&hourly=temperature_2m&past_hours=23&forecast_hours=1"
     "&timezone=auto&wind_speed_unit=ms"
 )
@@ -192,13 +208,15 @@ class Ticker:
 
     H = 14
 
-    def __init__(self, x, y, w=166):
+    def __init__(self, x, y, w=166, bg=None, fg=None, box=10):
         self.W = w
-        rrect(x - 4, y - 2, w + 8, 18, 3, 10)
+        if box is not None:
+            rrect(x - 4, y - 2, w + 8, 18, 3, box)
         self.bmp = displayio.Bitmap(self.W, self.H, 2)
         p = displayio.Palette(2)
-        p[0] = GREYS[10]
-        p[1] = GREYS[1]
+        p[0] = GREYS[10] if bg is None else bg
+        p[1] = GREYS[1] if fg is None else fg
+        self.pal = p
         root.append(displayio.TileGrid(self.bmp, pixel_shader=p, x=x, y=y))
         self.src = render_strip(F_SMALL, " ", self.H, 10)
         self.x = -self.W
@@ -238,8 +256,9 @@ class AnalogClock:
     """Clock face in a bitmap + hour/minute/second hands as vectorio polygons.
     The second hand sweeps smoothly (it's redrawn every frame)."""
 
-    def __init__(self, group, cx, cy, r, numbers=False):
+    def __init__(self, group, cx, cy, r, numbers=False, tip=False, blunt=False):
         self.cx, self.cy, self.r = cx, cy, r
+        self.blunt = blunt              # straight-sided hands (station-clock style)
         c = r + 1
         self.fpal = displayio.Palette(5)            # 0 clear, 1 face, 2 rim, 3 minute ticks, 4 hour ticks
         self.fpal.make_transparent(0)
@@ -277,12 +296,18 @@ class AnalogClock:
             group.append(h)
         group.append(vectorio.Circle(pixel_shader=self.hpal, radius=max(2, r // 18),
                                      x=cx, y=cy, color_index=3))
+        self.tip = None                 # the red disc near the end of a Swiss seconds hand
+        if tip:
+            self.tip = vectorio.Circle(pixel_shader=self.hpal, radius=max(3, r // 10),
+                                       x=cx, y=cy, color_index=2)
+            group.append(self.tip)
         self._last = [None, None, None]
 
     def _hand(self, i, poly, angle, length, width, tail):
         dx, dy = math.sin(angle), -math.cos(angle)
         px, py = -dy, dx                              # perpendicular
-        hw, tw = width / 2, max(0.6, width / 5)
+        hw = width / 2
+        tw = hw * 0.8 if self.blunt and i < 2 else max(0.6, width / 5)
         pts = [(round(-dx * tail + px * hw), round(-dy * tail + py * hw)),
                (round(dx * length + px * tw), round(dy * length + py * tw)),
                (round(dx * length - px * tw), round(dy * length - py * tw)),
@@ -298,7 +323,13 @@ class AnalogClock:
         hrs = (h % 12) + mins / 60
         self._hand(0, self.hour, hrs * math.pi / 6, r * 0.52, max(4, r * 0.09), r * 0.08)
         self._hand(1, self.minute, mins * math.pi / 30, r * 0.80, max(3, r * 0.06), r * 0.08)
-        self._hand(2, self.second, sec * math.pi / 30, r * 0.88, 2 if r < 60 else 3, r * 0.2)
+        a = sec * math.pi / 30
+        self._hand(2, self.second, a, r * 0.88, 2 if r < 60 else 3, r * 0.2)
+        if self.tip:
+            tx = self.cx + round(math.sin(a) * r * 0.62)
+            ty = self.cy - round(math.cos(a) * r * 0.62)
+            if (tx, ty) != (self.tip.x, self.tip.y):
+                self.tip.x, self.tip.y = tx, ty
 
     def colours(self, face, rim, minor, major, hour, minute, second, numbers=None):
         for i, col in enumerate((face, rim, minor, major)):
@@ -309,176 +340,786 @@ class AnalogClock:
             n.color = numbers if numbers is not None else major
 
 
+# ============================================================= THEME KIT
+# THEME="aura" (default): every screen gets its own look - a living sky for the
+# weather, a P&L dial whose glow follows the market, an amber trading terminal,
+# broadcast-style cricket scorebug, a news lower-third and a station clock.
+# THEME="classic": the original grey look.  The board's web page can switch too.
+
+def mix(a, b, t):
+    """Blend colour a towards colour b by t (0..1)."""
+    out = 0
+    for sh in (16, 8, 0):
+        ca, cb = (a >> sh) & 255, (b >> sh) & 255
+        out |= int(ca + (cb - ca) * t + 0.5) << sh
+    return out
+
+
+def ramp(stops, n):
+    """n colours spread evenly along a list of colour stops."""
+    out = []
+    for i in range(n):
+        p = i / (n - 1) * (len(stops) - 1)
+        k = min(int(p), len(stops) - 2)
+        out.append(mix(stops[k], stops[k + 1], p - k))
+    return out
+
+
+def luma(c):
+    return (((c >> 16) & 255) * 299 + ((c >> 8) & 255) * 587 + (c & 255) * 114) // 1000
+
+
+class Ghost:
+    """Stands in for a label that a theme doesn't show."""
+
+    def __init__(self):
+        self.text = ""
+        self.color = 0
+        self.hidden = True
+        self.anchored_position = (0, 0)
+
+
+_DITHER = (0.0, 0.5, 0.25, 0.75)
+
+
+class Backdrop:
+    """Full-screen vertical gradient with frosted 'glass' cards, drawn once.
+    Recolouring only rewrites the palette, so a new sky or mood is instant."""
+
+    N = 16
+
+    def __init__(self, group, cards=(), stripes=0):
+        n = self.N
+        self.bmp = displayio.Bitmap(320, 170, 2 * n)
+        self.pal = displayio.Palette(2 * n)
+        for y in range(170):
+            v = y / 169 * (n - 1)
+            lv = int(v)
+            if v - lv > _DITHER[y % 4] and lv < n - 1:   # ordered dither: no banding
+                lv += 1
+            bitmaptools.fill_region(self.bmp, 0, y, 320, y + 1, lv)
+            if stripes and lv < n - 1:                    # mown-pitch stripes
+                for sx in range(stripes, 320, 2 * stripes):
+                    bitmaptools.fill_region(self.bmp, sx, y, min(320, sx + stripes), y + 1, lv + 1)
+            for cx, cy, cw, ch, r in cards:
+                if cy <= y < cy + ch:
+                    dy = cy + r - y if y < cy + r else (y - (cy + ch - r - 1) if y >= cy + ch - r else 0)
+                    inset = r - int((r * r - dy * dy) ** 0.5) if dy > 0 else 0
+                    bitmaptools.fill_region(self.bmp, cx + inset, y, cx + cw - inset, y + 1, n + lv)
+        group.append(displayio.TileGrid(self.bmp, pixel_shader=self.pal))
+
+    def colours(self, stops, glass=0x000000, amount=0.32):
+        for i, c in enumerate(ramp(stops, self.N)):
+            self.pal[i] = c
+            self.pal[self.N + i] = mix(c, glass, amount)
+
+    def glass_at(self, y):
+        return self.pal[self.N + min(self.N - 1, int(y / 169 * (self.N - 1) + 0.5))]
+
+    def colour_at(self, y):
+        return self.pal[min(self.N - 1, int(y / 169 * (self.N - 1) + 0.5))]
+
+
+def ring(group, x, y, r, colour, width=2):
+    """A small hollow circle (the degree sign for big numbers)."""
+    bmp = displayio.Bitmap(2 * r + 1, 2 * r + 1, 2)
+    p = displayio.Palette(2)
+    p.make_transparent(0)
+    p[1] = colour
+    _circle(bmp, r, r, r, 1)
+    _circle(bmp, r, r, r - width, 0)
+    tg = displayio.TileGrid(bmp, pixel_shader=p, x=x, y=y)
+    group.append(tg)
+    return tg
+
+
+class WeatherIcon:
+    """Weather symbol drawn with circles and lines (sun, moon, cloud, rain...)."""
+
+    W, H = 60, 50
+    COLS = (0, 0xFFC23D, 0xFFE08A, 0xF4F6F8, 0xA9B5C2, 0x7CC8FF, 0xFFE14D, 0xF3EBCF)
+
+    def __init__(self, group, x, y):
+        self.bmp = displayio.Bitmap(self.W, self.H, len(self.COLS))
+        p = displayio.Palette(len(self.COLS))
+        for i, c in enumerate(self.COLS):
+            p[i] = c
+        p.make_transparent(0)
+        group.append(displayio.TileGrid(self.bmp, pixel_shader=p, x=x, y=y))
+        self.kind = None
+
+    def _thick(self, x0, y0, x1, y1, v, w=2):
+        mx, my = self.W - 1, self.H - 1
+        for o in range(w):                    # clamp: the board rejects off-bitmap lines
+            bitmaptools.draw_line(self.bmp, max(0, min(mx, int(x0 + o))), max(0, min(my, int(y0))),
+                                  max(0, min(mx, int(x1 + o))), max(0, min(my, int(y1))), v)
+
+    def _sun(self, cx, cy, r):
+        for k in range(8):
+            a = k * math.pi / 4
+            dx, dy = math.cos(a), math.sin(a)
+            self._thick(cx + dx * (r + 4), cy + dy * (r + 4), cx + dx * (r + 9), cy + dy * (r + 9), 2)
+        _circle(self.bmp, cx, cy, r, 1)
+
+    def _moon(self, cx, cy, r):
+        _circle(self.bmp, cx, cy, r, 7)
+        _circle(self.bmp, int(cx + r * 0.55), int(cy - r * 0.45), int(r * 0.8), 0)
+
+    def _cloud(self, cx, cy, s, col=3, shade=4):
+        for dx, dy, v in ((3, 3, shade), (0, 0, col)):
+            for ox, oy, rr in ((-0.55, 0.12, 0.42), (-0.05, -0.2, 0.56), (0.5, 0.06, 0.4)):
+                _circle(self.bmp, int(cx + ox * s + dx), int(cy + oy * s + dy), int(rr * s), v)
+            bitmaptools.fill_region(self.bmp, int(cx - 0.55 * s + dx), int(cy + 0.12 * s + dy),
+                                    int(cx + 0.5 * s + dx), int(cy + 0.5 * s + dy), v)
+
+    def show(self, kind, day=True):
+        if (kind, day) == self.kind:
+            return
+        self.kind = (kind, day)
+        b = self.bmp
+        b.fill(0)
+        if kind in ("clear", "partly"):
+            if day:
+                self._sun(22 if kind == "partly" else 30, 20 if kind == "partly" else 24, 10 if kind == "partly" else 11)
+            else:
+                self._moon(24 if kind == "partly" else 30, 18 if kind == "partly" else 24, 13)
+            if kind == "partly":
+                self._cloud(36, 32, 17)
+        elif kind == "fog":
+            for i, w in enumerate((44, 52, 40)):
+                y = 14 + i * 9
+                bitmaptools.fill_region(b, 30 - w // 2, y, 30 + w // 2, y + 4, 3 if i != 1 else 4)
+        else:
+            self._cloud(31, 18, 20, 3 if kind == "cloudy" else 4, 4 if kind == "cloudy" else 3)
+            if kind in ("drizzle", "rain"):
+                for k in range(4 if kind == "rain" else 3):
+                    x0 = 16 + k * 9 + (0 if kind == "rain" else 4)
+                    self._thick(x0, 36, x0 - 4, 36 + (10 if kind == "rain" else 6), 5)
+            elif kind == "snow":
+                for x, y in ((16, 38), (28, 44), (40, 38), (22, 47), (46, 46)):
+                    _circle(b, x, y, 2, 3)
+            elif kind == "storm":
+                for o in range(3):
+                    bitmaptools.draw_line(b, 34 + o, 32, 26 + o, 41, 6)
+                    bitmaptools.draw_line(b, 26 + o, 41, 35 + o, 41, 6)
+                    bitmaptools.draw_line(b, 35 + o, 41, 27 + o, 49, 6)
+
+
+class Gauge:
+    """Semicircle dial (red -> green) with a needle that eases to its target."""
+
+    BANDS = (0xD83B3B, 0xE5674A, 0xE7A04F, 0x8A9099, 0x8CCB5E, 0x4CC66B, 0x23A55A)
+
+    def __init__(self, group, cx, cy, r, span=3.0, ring_w=9):
+        self.cx, self.cy, self.r, self.span = cx, cy, r, span
+        nb = len(self.BANDS)
+        bmp = displayio.Bitmap(2 * r + 1, r + 2, nb + 3)
+        p = displayio.Palette(nb + 3)
+        p.make_transparent(0)
+        for i, c in enumerate(self.BANDS):
+            p[i + 1] = c
+        p[nb + 1] = 0xE8E8E8                     # ticks
+        p[nb + 2] = 0x2A2E33
+        ri = r - ring_w
+        for yy in range(r + 1):
+            dy = r - yy
+            xo = int((r * r - dy * dy) ** 0.5)
+            xi = int((ri * ri - dy * dy) ** 0.5) if dy < ri else 0
+            for xx in list(range(r - xo, r - xi + 1)) + list(range(r + xi, r + xo + 1)):
+                a = math.atan2(dy, xx - r)                         # 0 right .. pi left
+                band = int((1 - a / math.pi) * nb * 0.9999)
+                bmp[xx, yy] = 1 + max(0, min(nb - 1, band))
+        steps = int(span)
+        for k in range(-steps, steps + 1):                         # a tick every 1 %
+            a = math.pi * (1 - (k + span) / (2 * span))
+            dx, dy = math.cos(a), -math.sin(a)
+            for o in (0, 0.6):
+                bitmaptools.draw_line(bmp, int(r + dx * (ri - 7) + o), int(r + dy * (ri - 7)),
+                                      int(r + dx * (ri - 2) + o), int(r + dy * (ri - 2)), nb + 1)
+        group.append(displayio.TileGrid(bmp, pixel_shader=p, x=cx - r, y=cy - r))
+        self.npal = displayio.Palette(2)
+        self.npal[0] = 0xFFFFFF
+        self.npal[1] = 0x16191D
+        self.needle = vectorio.Polygon(pixel_shader=self.npal, points=[(0, 0), (1, 0), (0, 1)],
+                                       x=cx, y=cy, color_index=0)
+        group.append(self.needle)
+        group.append(vectorio.Circle(pixel_shader=self.npal, radius=6, x=cx, y=cy, color_index=0))
+        group.append(vectorio.Circle(pixel_shader=self.npal, radius=2, x=cx, y=cy, color_index=1))
+        self.v = 0.0
+        self.target = 0.0
+        self._pts = None
+        self._draw()
+
+    def set(self, value):
+        self.target = max(-self.span * 1.04, min(self.span * 1.04, value))
+
+    def _draw(self):
+        a = math.pi * (1 - (self.v + self.span) / (2 * self.span))
+        dx, dy = math.cos(a), -math.sin(a)
+        px, py = -dy, dx
+        L, tail = self.r - 13, 8
+        pts = [(round(-dx * tail + px * 3), round(-dy * tail + py * 3)),
+               (round(dx * L), round(dy * L)),
+               (round(-dx * tail - px * 3), round(-dy * tail - py * 3))]
+        if pts != self._pts:
+            self._pts = pts
+            self.needle.points = pts
+
+    def step(self):
+        d = self.target - self.v
+        if abs(d) > 0.002:
+            self.v += d * 0.12 if abs(d) > 0.02 else d
+            self._draw()
+
+
+# broadcast-style team colours (country sides and IPL franchises)
+TEAM_COLOURS = {
+    "chennai super kings": 0xF9CD05, "mumbai indians": 0x004BA0, "royal challengers": 0xD1121B,
+    "kolkata knight riders": 0x3A225D, "sunrisers hyderabad": 0xF26522, "delhi capitals": 0x17449B,
+    "rajasthan royals": 0xEA1A85, "punjab kings": 0xDD1F2D, "gujarat titans": 0x2C3E66,
+    "lucknow super giants": 0x00AEEF, "south africa": 0x007A4D, "new zealand": 0x3A3A3A,
+    "sri lanka": 0x1B3F8B, "west indies": 0x7B1E3A, "afghanistan": 0x1559B7,
+    "bangladesh": 0x006A4E, "netherlands": 0xF36C21, "zimbabwe": 0xD40000, "australia": 0xF2C200,
+    "pakistan": 0x0B6B3A, "scotland": 0x2A3F8F, "ireland": 0x169B62, "england": 0x1B3A73,
+    "india": 0x1F5FBF, "nepal": 0xDC143C, "oman": 0xC8102E, "uae": 0x00843D, "usa": 0x1C3F94,
+    "csk": 0xF9CD05, "mi": 0x004BA0, "rcb": 0xD1121B, "kkr": 0x3A225D, "srh": 0xF26522,
+    "dc": 0x17449B, "rr": 0xEA1A85, "pbks": 0xDD1F2D, "gt": 0x2C3E66, "lsg": 0x00AEEF,
+    "ind": 0x1F5FBF, "aus": 0xF2C200, "eng": 0x1B3A73, "pak": 0x0B6B3A, "sa": 0x007A4D,
+    "rsa": 0x007A4D, "nz": 0x3A3A3A, "sl": 0x1B3F8B, "wi": 0x7B1E3A, "afg": 0x1559B7,
+    "ban": 0x006A4E, "ned": 0xF36C21, "zim": 0xD40000, "ire": 0x169B62, "sco": 0x2A3F8F,
+}
+_SPARE = (0x7A3E9D, 0x0E7C86, 0xB5532A, 0x3B6E22, 0x8C1C4A, 0x2D5DA8)
+
+
+def team_colour(name):
+    n = (name or "").lower().strip()
+    if not n:
+        return 0x2A2F36
+    if n in TEAM_COLOURS:
+        return TEAM_COLOURS[n]
+    for key in sorted(TEAM_COLOURS, key=len, reverse=True):     # "India Women" -> india
+        if len(key) > 3 and key in n:
+            return TEAM_COLOURS[key]
+    return _SPARE[sum(ord(ch) for ch in n) % len(_SPARE)]
+
+
+def _nop(*_a):
+    pass
+
+
+# screen hooks: the classic theme needs none of these, aura fills them in below
+th_weather = th_air = th_port = th_index = th_team = th_minute = th_second = th_frame = _nop
+NEWS_X = 5
+SEG_COLS = (1, 7, 10)          # news progress: current, other headlines, unused
+
+
+def show_index_error(i, msg):
+    mkt_chg[i].text = msg
+    mkt_chg[i].color = GREYS[6]
+
+
 # ============================================================= WEATHER SCREEN
-weather_grp = displayio.Group()
-root = weather_grp
+if CLASSIC:
+    weather_grp = displayio.Group()
+    root = weather_grp
 
-rect(138, 8, 1, 156, 6)
-rect(98, 106, 36, 1, 6)
-text(F_TITLE, "WEATHER", 5, 4, GREYS[1])
-text(F_SMALL, "INTERNET", 90, 4, GREYS[5])
-text(F_SMALL, "STATION", 90, 15, GREYS[5])
-root.append(vectorio.Circle(pixel_shader=pal, radius=2, x=8, y=40, color_index=2))
-text(F_MED, "C", 12, 34, GREYS[2])
-lbl_temp = text(F_BIG, "--.-", 72, 72, GREYS[0], center=True)
-text(F_MED, "TOWN:", 5, 108, GREYS[7])
-text(F_MED, TOWN[:6].upper(), 58, 108, GREYS[3])
-lbl_feels = text(F_MED, "", 5, 128, GREYS[4])
-lbl_range = text(F_SMALL, "Low --  High --", 5, 151, GREYS[6])
+    rect(138, 8, 1, 156, 6)
+    rect(98, 106, 36, 1, 6)
+    text(F_TITLE, "WEATHER", 5, 4, GREYS[1])
+    text(F_SMALL, "INTERNET", 90, 4, GREYS[5])
+    text(F_SMALL, "STATION", 90, 15, GREYS[5])
+    root.append(vectorio.Circle(pixel_shader=pal, radius=2, x=8, y=40, color_index=2))
+    text(F_MED, "C", 12, 34, GREYS[2])
+    lbl_temp = text(F_BIG, "--.-", 72, 72, GREYS[0], center=True)
+    text(F_MED, "TOWN:", 5, 108, GREYS[7])
+    text(F_MED, TOWN[:6].upper(), 58, 108, GREYS[3])
+    lbl_feels = text(F_MED, "", 5, 128, GREYS[4])
+    lbl_range = text(F_SMALL, "Low --  High --", 5, 151, GREYS[6])
 
-# clock panel (replaces the old "last 24h" graph and digital clock)
-rrect(144, 6, 174, 86, 6, 10)
-wx_clock = AnalogClock(root, 188, 49, 40)
-wx_clock.colours(0x0C0C0C, 0x3A3A3A, 0x5A5A5A, 0xD0D0D0, 0xD8D8D8, 0xF4F4F4, 0xE84040)
-lbl_wday = text(F_TITLE, "---", 238, 12, GREYS[1])
-lbl_wdate = text(F_MED, "", 238, 36, GREYS[3])
-lbl_wdaypct = text(F_SMALL, "", 238, 62, GREYS[6])
-wx_daybar = displayio.Bitmap(72, 3, 3)
-wx_daypal = displayio.Palette(3)
-wx_daypal[0], wx_daypal[1], wx_daypal[2] = GREYS[8], GREEN, GREYS[10]
-root.append(displayio.TileGrid(wx_daybar, pixel_shader=wx_daypal, x=238, y=78))
+    # clock panel (replaces the old "last 24h" graph and digital clock)
+    rrect(144, 6, 174, 86, 6, 10)
+    wx_clock = AnalogClock(root, 188, 49, 40)
+    wx_clock.colours(0x0C0C0C, 0x3A3A3A, 0x5A5A5A, 0xD0D0D0, 0xD8D8D8, 0xF4F4F4, 0xE84040)
+    lbl_wday = text(F_TITLE, "---", 238, 12, GREYS[1])
+    lbl_wdate = text(F_MED, "", 238, 36, GREYS[3])
+    lbl_wdaypct = text(F_SMALL, "", 238, 62, GREYS[6])
+    wx_daybar = displayio.Bitmap(72, 3, 3)
+    wx_daypal = displayio.Palette(3)
+    wx_daypal[0], wx_daypal[1], wx_daypal[2] = GREYS[8], GREEN, GREYS[10]
+    root.append(displayio.TileGrid(wx_daybar, pixel_shader=wx_daypal, x=238, y=78))
 
-tile_vals = []
-for i, name in enumerate(("HUM %", "WIND m/s", "PM2.5")):
-    x = 144 + i * 60
-    rrect(x, 97, 54, 34, 4, 9)
-    text(F_SMALL, name, x + 27, 104, GREYS[3], center=True)
-    tile_vals.append(text(F_MED, "--", x + 27, 117, GREYS[2], center=True))
-text(F_SMALL, "CURRENT WEATHER", 168, 135, GREYS[4])
-lbl_counter = text(F_SMALL, "0", 308, 135, GREYS[9])
-weather_ticker = Ticker(148, 150)
+    tile_vals = []
+    for i, name in enumerate(("HUM %", "WIND m/s", "PM2.5")):
+        x = 144 + i * 60
+        rrect(x, 97, 54, 34, 4, 9)
+        text(F_SMALL, name, x + 27, 104, GREYS[3], center=True)
+        tile_vals.append(text(F_MED, "--", x + 27, 117, GREYS[2], center=True))
+    text(F_SMALL, "CURRENT WEATHER", 168, 135, GREYS[4])
+    lbl_counter = text(F_SMALL, "0", 308, 135, GREYS[9])
+    weather_ticker = Ticker(148, 150)
+else:
+    # Living sky: the background is the weather report (time of day + conditions),
+    # frosted-glass cards, a big symbol and a Swiss station clock.
+    weather_grp = displayio.Group()
+    root = weather_grp
+    wx_bg = Backdrop(root, cards=((164, 6, 150, 88, 9), (164, 100, 47, 40, 7),
+                                  (215, 100, 47, 40, 7), (266, 100, 48, 40, 7),
+                                  (4, 146, 312, 21, 7)))
+    text(F_TITLE, TOWN[:13].upper(), 8, 6, WHITE)
+    wx_icon = WeatherIcon(root, 2, 28)
+    lbl_temp = text(F_BIG, "--", 66, 27, WHITE)
+    wx_deg = ring(root, 120, 30, 5, WHITE, 2)
+    lbl_cond = text(F_MED, "", 8, 82, WHITE)
+    lbl_feels = text(F_MED, "", 8, 103, 0xE6EDF5)
+    lbl_range = text(F_MED, "", 8, 123, 0xE6EDF5)
+    wx_clock = AnalogClock(root, 206, 50, 38, tip=True, blunt=True)
+    wx_clock.colours(0xF6F6F2, 0xC9CED4, 0x55595E, 0x141414, 0x141414, 0x141414, 0xD22630)
+    lbl_wday = text(F_TITLE, "---", 252, 13, WHITE)
+    lbl_wdate = text(F_MED, "", 252, 35, 0xEEF3F8)
+    lbl_wdaypct = text(F_SMALL, "", 252, 60, 0xD5DEE8)
+    wx_daybar = displayio.Bitmap(56, 3, 3)
+    wx_daypal = displayio.Palette(3)
+    wx_daypal[0], wx_daypal[1], wx_daypal[2] = 0x5C6B7A, 0xFFD27A, 0
+    root.append(displayio.TileGrid(wx_daybar, pixel_shader=wx_daypal, x=252, y=78))
+    tile_vals = []
+    for i, name in enumerate(("HUM %", "WIND", "PM2.5")):
+        x = 164 + i * 51
+        text(F_SMALL, name, x + 23, 107, 0xD5DEE8, center=True)
+        tile_vals.append(text(F_MED, "--", x + 23, 121, WHITE, center=True))
+    lbl_counter = Ghost()
+    weather_ticker = Ticker(10, 149, 300, bg=0x203040, fg=WHITE, box=None)
+    wx_code, wx_isday = 0, 1
+
+    SKY = {   # top, middle, bottom of the sky for clear weather
+        "day": (0x0A47A3, 0x2C7BD6, 0x63A8E8), "dawn": (0x22285C, 0x784886, 0xEE946A),
+        "dusk": (0x15153E, 0x672C6C, 0xE2663D), "night": (0x03060F, 0x0A1430, 0x1A2952)}
+    COND = {  # (day, night) skies for other weather
+        "cloudy": ((0x3B4859, 0x667586, 0x8F9CAB), (0x0B0E14, 0x1A202B, 0x2C3442)),
+        "fog": ((0x535C68, 0x79828E, 0x9DA5AE), (0x14171C, 0x262A31, 0x3A3F47)),
+        "rain": ((0x1D2A3A, 0x33465B, 0x4E647C), (0x05080D, 0x0F1622, 0x1D2838)),
+        "storm": ((0x14111F, 0x2B2440, 0x4A3F66), (0x05040A, 0x120F1D, 0x241E36)),
+        "snow": ((0x46607D, 0x7790AB, 0xA6B8CC), (0x0E1420, 0x22304A, 0x3B4D6B))}
+
+    def wx_kind(code):
+        if code in (0, 1):
+            return "clear"
+        if code == 2:
+            return "partly"
+        if code == 3:
+            return "cloudy"
+        if code in (45, 48):
+            return "fog"
+        if 51 <= code <= 57:
+            return "drizzle"
+        if 61 <= code <= 67 or 80 <= code <= 82:
+            return "rain"
+        if 71 <= code <= 77 or code in (85, 86):
+            return "snow"
+        return "storm" if code >= 95 else "cloudy"
+
+    def wx_sky():
+        h = time.localtime().tm_hour
+        phase = ("dawn" if h < 8 else "dusk" if h >= 17 else "day") if wx_isday else "night"
+        kind = wx_kind(wx_code)
+        cond = {"drizzle": "rain"}.get(kind, kind)
+        if cond in COND:
+            day, night = COND[cond]
+            stops = night if phase == "night" else day
+            if phase in ("dawn", "dusk"):          # a hint of sunrise/sunset behind the clouds
+                stops = tuple(mix(a, b, 0.35) for a, b in zip(stops, SKY[phase]))
+        else:
+            stops = SKY[phase]
+        wx_bg.colours(stops, 0x000000, 0.34)
+        weather_ticker.pal[0] = wx_bg.glass_at(156)
+        wx_icon.show(kind, phase != "night")
+
+    def th_weather(cur, d):
+        global wx_code, wx_isday
+        wx_code = cur.get("weather_code", 0)
+        wx_isday = cur.get("is_day", 1)
+        lbl_temp.text = "%d" % round(cur["temperature_2m"])
+        wx_deg.x = 66 + px_width(F_BIG, lbl_temp.text) + 4
+        lbl_cond.text = WMO.get(wx_code, "")[:17]
+        lbl_feels.text = "Feels like %d°" % round(cur["apparent_temperature"])
+        vals = [t for t in d["hourly"]["temperature_2m"] if t is not None][-24:]
+        if vals:
+            lbl_range.text = "Low %d°  High %d°" % (round(min(vals)), round(max(vals)))
+        wx_sky()
+
+    def th_air(cur):
+        pm = cur["pm2_5"]
+        tile_vals[2].color = (0x7CE38B if pm <= 30 else 0xC6E36B if pm <= 60 else 0xFFD84D
+                              if pm <= 90 else 0xFF9F43 if pm <= 120 else 0xFF6B6B
+                              if pm <= 250 else 0xD08CFF)
+
+    wx_sky()
+
 
 # ============================================================= PORTFOLIO SCREEN
-port_grp = displayio.Group()
-root = port_grp
+if CLASSIC:
+    port_grp = displayio.Group()
+    root = port_grp
 
-text(F_TITLE, "PORTFOLIO", 5, 4, GREYS[1])
-text(F_SMALL, "ZERODHA", 98, 4, GREYS[5])
-text(F_SMALL, "HOLDINGS", 98, 15, GREYS[5])
-lbl_pclock = text(F_TITLE, "--:--", 315, 4, GREYS[4], right=True)
-rect(5, 30, 310, 1, 8)
-rect(160, 38, 1, 64, 6)
+    text(F_TITLE, "PORTFOLIO", 5, 4, GREYS[1])
+    text(F_SMALL, "ZERODHA", 98, 4, GREYS[5])
+    text(F_SMALL, "HOLDINGS", 98, 15, GREYS[5])
+    lbl_pclock = text(F_TITLE, "--:--", 315, 4, GREYS[4], right=True)
+    rect(5, 30, 310, 1, 8)
+    rect(160, 38, 1, 64, 6)
 
-text(F_SMALL, "TODAY'S P&L", 6, 38, GREYS[5])
-lbl_day = text(F_MONEY, "--", 6, 54, GREYS[0])
-lbl_day_pct = text(F_MED, "", 6, 86, GREYS[3])
-text(F_SMALL, "TOTAL P&L", 168, 38, GREYS[5])
-lbl_tot = text(F_MONEY, "--", 168, 54, GREYS[0])
-lbl_tot_pct = text(F_MED, "", 168, 86, GREYS[3])
+    text(F_SMALL, "TODAY'S P&L", 6, 38, GREYS[5])
+    lbl_day = text(F_MONEY, "--", 6, 54, GREYS[0])
+    lbl_day_pct = text(F_MED, "", 6, 86, GREYS[3])
+    text(F_SMALL, "TOTAL P&L", 168, 38, GREYS[5])
+    lbl_tot = text(F_MONEY, "--", 168, 54, GREYS[0])
+    lbl_tot_pct = text(F_MED, "", 168, 86, GREYS[3])
 
-port_tiles = []
-for i, name in enumerate(("INVESTED", "CURRENT", "STOCKS")):
-    x = 5 + i * 105
-    w = 100
-    rrect(x, 110, w, 34, 4, 9)
-    text(F_SMALL, name, x + w // 2, 117, GREYS[3], center=True)
-    port_tiles.append(text(F_MED, "--", x + w // 2, 128, GREYS[2], center=True))
+    port_tiles = []
+    for i, name in enumerate(("INVESTED", "CURRENT", "STOCKS")):
+        x = 5 + i * 105
+        w = 100
+        rrect(x, 110, w, 34, 4, 9)
+        text(F_SMALL, name, x + w // 2, 117, GREYS[3], center=True)
+        port_tiles.append(text(F_MED, "--", x + w // 2, 128, GREYS[2], center=True))
 
-text(F_SMALL, "MOVERS", 6, 151, GREYS[4])
-port_ticker = Ticker(54, 150, 260)
+    text(F_SMALL, "MOVERS", 6, 151, GREYS[4])
+    port_ticker = Ticker(54, 150, 260)
+else:
+    # Mood: the backdrop glows green or red with the day, and a dial (a preview of
+    # the servo gauge project) swings to today's % move.
+    port_grp = displayio.Group()
+    root = port_grp
+    port_bg = Backdrop(root, cards=((5, 29, 152, 114, 9), (4, 146, 312, 21, 7)))
+    text(F_TITLE, "PORTFOLIO", 8, 5, WHITE)
+    lbl_pstocks = text(F_SMALL, "ZERODHA", 104, 9, 0x9AA3AD)
+    lbl_pclock = text(F_TITLE, "--:--", 314, 5, 0xB8C0C8, right=True)
+    port_gauge = Gauge(root, 81, 112, 66, span=3.0)
+    text(F_SMALL, "-3%", 13, 118, 0xB0B7BF)
+    text(F_SMALL, "+3%", 149, 118, 0xB0B7BF, right=True)
+    text(F_SMALL, "TODAY", 81, 36, 0xB0B7BF, center=True)
+    lbl_day_pct = text(F_MED, "", 81, 126, WHITE, center=True)
+    text(F_SMALL, "TODAY'S P&L", 166, 32, 0x9AA3AD)
+    lbl_day = text(F_MONEY, "--", 165, 44, WHITE)
+    text(F_SMALL, "TOTAL P&L", 166, 77, 0x9AA3AD)
+    lbl_tot = text(F_TITLE, "--", 166, 88, WHITE)
+    lbl_tot_pct = text(F_SMALL, "", 314, 92, WHITE, right=True)
+    rect(166, 111, 148, 1, 9)
+    text(F_SMALL, "INVESTED", 166, 117, 0x9AA3AD)
+    text(F_SMALL, "CURRENT", 166, 131, 0x9AA3AD)
+    port_tiles = [text(F_MED, "--", 314, 113, 0xE6EAEE, right=True),
+                  text(F_MED, "--", 314, 127, 0xE6EAEE, right=True), Ghost()]
+    port_ticker = Ticker(10, 149, 300, bg=0x101418, fg=WHITE, box=None)
+
+    def port_mood(sign):
+        glow = {1: 0x0F5A2C, -1: 0x6A1218}.get(sign, 0x22272D)
+        port_bg.colours((0x07090B, mix(0x07090B, glow, 0.35), glow), 0xFFFFFF, 0.07)
+        port_ticker.pal[0] = port_bg.glass_at(156)
+
+    def th_port(v):
+        if v is None:                                   # logged out
+            port_mood(0)
+            port_gauge.set(0)
+            lbl_pstocks.text = "ZERODHA"
+            return
+        day, day_pct, total, total_pct, invested, current, n = v
+        port_mood(1 if day >= 0 else -1)
+        port_gauge.set(day_pct)
+        lbl_tot_pct.text = "%+.2f%%" % total_pct
+        lbl_pstocks.text = "ZERODHA - %d STOCKS" % n
+
+    def th_frame(showing):
+        if showing == "portfolio":
+            port_gauge.step()
+        elif showing == "cricket":
+            cric_sync()
+
+    port_mood(0)
+
 
 # ============================================================= CRICKET SCREEN
-cric_grp = displayio.Group()
-root = cric_grp
+if CLASSIC:
+    cric_grp = displayio.Group()
+    root = cric_grp
 
-text(F_TITLE, "CRICKET", 5, 4, GREYS[1])
-lbl_ctype = text(F_SMALL, "", 82, 4, GREYS[5])
-lbl_clive = text(F_SMALL, "", 82, 15, GREYS[5])
-lbl_cclock = text(F_TITLE, "--:--", 315, 4, GREYS[4], right=True)
-rect(5, 30, 310, 1, 8)
-lbl_cname = text(F_SMALL, "No match selected", 6, 34, GREYS[3])
-cric_team, cric_overs, cric_score = [], [], []
-for i in range(2):
-    y0 = 52 + i * 46
-    rrect(5, y0, 310, 42, 4, 10)
-    cric_team.append(text(F_TITLE, "---", 14, y0 + 2, GREYS[2]))
-    cric_overs.append(text(F_SMALL, "", 14, y0 + 26, GREYS[5]))
-    cric_score.append(text(F_TIME, "", 306, y0 + 4, GREYS[2], right=True))
-cric_ticker = Ticker(10, 150, 300)
+    text(F_TITLE, "CRICKET", 5, 4, GREYS[1])
+    lbl_ctype = text(F_SMALL, "", 82, 4, GREYS[5])
+    lbl_clive = text(F_SMALL, "", 82, 15, GREYS[5])
+    lbl_cclock = text(F_TITLE, "--:--", 315, 4, GREYS[4], right=True)
+    rect(5, 30, 310, 1, 8)
+    lbl_cname = text(F_SMALL, "No match selected", 6, 34, GREYS[3])
+    cric_team, cric_overs, cric_score = [], [], []
+    for i in range(2):
+        y0 = 52 + i * 46
+        rrect(5, y0, 310, 42, 4, 10)
+        cric_team.append(text(F_TITLE, "---", 14, y0 + 2, GREYS[2]))
+        cric_overs.append(text(F_SMALL, "", 14, y0 + 26, GREYS[5]))
+        cric_score.append(text(F_TIME, "", 306, y0 + 4, GREYS[2], right=True))
+    cric_ticker = Ticker(10, 150, 300)
+else:
+    # Broadcast scorebug: team-colour blocks, big score, mown-pitch backdrop.
+    cric_grp = displayio.Group()
+    root = cric_grp
+    cric_bg = Backdrop(root, cards=((5, 45, 310, 44, 6), (5, 93, 310, 44, 6), (4, 146, 312, 21, 7)),
+                       stripes=20)
+    cric_bg.colours((0x0A2414, 0x0F3A1F, 0x15502B), 0x000000, 0.55)
+    text(F_TITLE, "CRICKET", 8, 5, WHITE)
+    cric_pill = RoundRect(84, 6, 58, 16, 4, fill=0xE0242F)
+    root.append(cric_pill)
+    lbl_clive = text(F_SMALL, "", 113, 14, WHITE, center=True)
+    lbl_ctype = Ghost()
+    lbl_cclock = text(F_TITLE, "--:--", 314, 5, 0xCFE3D6, right=True)
+    lbl_cname = text(F_SMALL, "No match selected", 8, 30, 0xE8F2EB)
+    cric_team, cric_overs, cric_score, cric_block, cric_bat = [], [], [], [], []
+    for i in range(2):
+        y0 = 45 + i * 48
+        bp = displayio.Palette(1)
+        bp[0] = 0x2A2F36
+        blk = vectorio.Rectangle(pixel_shader=bp, width=64, height=44, x=5, y=y0)
+        root.append(blk)
+        cric_block.append(bp)
+        cric_team.append(text(F_TITLE, "", 37, y0 + 19, WHITE, center=True))
+        cric_overs.append(text(F_SMALL, "", 78, y0 + 26, 0xBFD3C6))
+        cric_score.append(text(F_TIME, "", 306, y0 + 9, WHITE, right=True))
+        dot_pal = displayio.Palette(1)
+        dot_pal[0] = 0xE0242F
+        dot = vectorio.Circle(pixel_shader=dot_pal, radius=4, x=84, y=y0 + 14)
+        dot.hidden = True
+        root.append(dot)
+        cric_bat.append(dot)
+    cric_names = [text(F_MED, "", 78, 51 + i * 48, WHITE) for i in range(2)]
+    cric_ticker = Ticker(10, 149, 300, bg=cric_bg.glass_at(156), fg=WHITE, box=None)
+
+    def th_team(i, name, batting):
+        c = team_colour(name if name else "")
+        cric_block[i][0] = c
+        cric_team[i].color = 0x111111 if luma(c) > 150 else WHITE
+        cric_bat[i].hidden = not batting
+        nm = (name or "")[:14]
+        cric_names[i].text = nm
+        cric_names[i].anchored_position = (96 if batting else 78, 51 + i * 48)
+        cric_names[i].color = WHITE if batting else 0xA9BDB0
+        cric_score[i].color = WHITE if batting else 0xA9BDB0
+        info = cric_overs[i].text.replace("  BATTING", "")
+        cric_overs[i].text = "" if info.strip().lower() == (name or "").strip().lower()[:24] else info
+
+    cric_pill_state = [None]
+
+    def cric_sync():
+        """Keep the LIVE/RESULT pill in step with the status label."""
+        live = lbl_clive.text
+        if live == cric_pill_state[0]:
+            return
+        cric_pill_state[0] = live
+        cric_pill.hidden = not live
+        lbl_clive.color = WHITE
+        if live:
+            cric_pill.fill = 0xE0242F if live == "LIVE" else 0x3A4A40
+
 
 # ============================================================= MARKETS SCREEN
-mkt_grp = displayio.Group()
-root = mkt_grp
+if CLASSIC:
+    mkt_grp = displayio.Group()
+    root = mkt_grp
 
-text(F_TITLE, "MARKETS", 5, 4, GREYS[1])
-text(F_SMALL, "INDIA", 92, 4, GREYS[5])
-text(F_SMALL, "USA", 92, 15, GREYS[5])
-lbl_mclock = text(F_TITLE, "--:--", 315, 4, GREYS[4], right=True)
-rect(5, 30, 310, 1, 8)
-INDICES = (
-    {"name": "SENSEX", "yahoo": "%5EBSESN", "mkt": "in"},
-    {"name": "NIFTY 50", "yahoo": "%5ENSEI", "mkt": "in"},
-    {"name": "NASDAQ", "fmp": "^IXIC", "mkt": "us"},
-    {"name": "S&P 500", "fmp": "^GSPC", "mkt": "us"},
-)
-mkt_val, mkt_chg, mkt_state = [], [], []
-for i, ix in enumerate(INDICES):
-    x = 5 + (i % 2) * 157
-    y = 35 + (i // 2) * 56
-    rrect(x, y, 153, 52, 4, 10)
-    text(F_SMALL, ix["name"], x + 7, y + 3, GREYS[4])
-    mkt_state.append(text(F_SMALL, "", x + 147, y + 3, GREYS[6], right=True))
-    mkt_val.append(text(F_TITLE, "--", x + 7, y + 14, GREYS[0]))
-    mkt_chg.append(text(F_MED, "", x + 7, y + 32, GREYS[3]))
-mkt_ticker = Ticker(10, 150, 300)
+    text(F_TITLE, "MARKETS", 5, 4, GREYS[1])
+    text(F_SMALL, "INDIA", 92, 4, GREYS[5])
+    text(F_SMALL, "USA", 92, 15, GREYS[5])
+    lbl_mclock = text(F_TITLE, "--:--", 315, 4, GREYS[4], right=True)
+    rect(5, 30, 310, 1, 8)
+    INDICES = (
+        {"name": "SENSEX", "yahoo": "%5EBSESN", "mkt": "in"},
+        {"name": "NIFTY 50", "yahoo": "%5ENSEI", "mkt": "in"},
+        {"name": "NASDAQ", "fmp": "^IXIC", "mkt": "us"},
+        {"name": "S&P 500", "fmp": "^GSPC", "mkt": "us"},
+    )
+    mkt_val, mkt_chg, mkt_state = [], [], []
+    for i, ix in enumerate(INDICES):
+        x = 5 + (i % 2) * 157
+        y = 35 + (i // 2) * 56
+        rrect(x, y, 153, 52, 4, 10)
+        text(F_SMALL, ix["name"], x + 7, y + 3, GREYS[4])
+        mkt_state.append(text(F_SMALL, "", x + 147, y + 3, GREYS[6], right=True))
+        mkt_val.append(text(F_TITLE, "--", x + 7, y + 14, GREYS[0]))
+        mkt_chg.append(text(F_MED, "", x + 7, y + 32, GREYS[3]))
+    mkt_ticker = Ticker(10, 150, 300)
+else:
+    # Trading terminal: amber on black, one row per index with a change bar.
+    mkt_grp = displayio.Group()
+    root = mkt_grp
+    AMBER = 0xFFA028
+    mkt_band_pal = displayio.Palette(1)
+    mkt_band_pal[0] = AMBER
+    root.append(vectorio.Rectangle(pixel_shader=mkt_band_pal, width=320, height=25, x=0, y=0))
+    text(F_TITLE, "MARKETS", 7, 2, 0x000000)
+    text(F_SMALL, "INDIA  USA", 92, 7, 0x4A2A00)
+    lbl_mclock = text(F_TITLE, "--:--", 314, 2, 0x000000, right=True)
+    INDICES = (
+        {"name": "SENSEX", "yahoo": "%5EBSESN", "mkt": "in"},
+        {"name": "NIFTY 50", "yahoo": "%5ENSEI", "mkt": "in"},
+        {"name": "NASDAQ", "fmp": "^IXIC", "mkt": "us"},
+        {"name": "S&P 500", "fmp": "^GSPC", "mkt": "us"},
+    )
+    mkt_val, mkt_chg, mkt_abs, mkt_dot, mkt_bar, mkt_barpal = [], [], [], [], [], []
+    mkt_state = [Ghost() for _ in INDICES]       # open/closed is the dot's colour
+    for i, ix in enumerate(INDICES):
+        y = 29 + i * 29
+        if i:
+            rect(6, y, 308, 1, 9)
+        dp = displayio.Palette(1)
+        dp[0] = 0x3A3A3A
+        root.append(vectorio.Circle(pixel_shader=dp, radius=4, x=11, y=y + 14))
+        mkt_dot.append(dp)
+        text(F_MED, ix["name"], 20, y + 6, AMBER)
+        mkt_val.append(text(F_TITLE, "--", 196, y + 5, 0xF2F2F2, right=True))
+        mkt_chg.append(text(F_MED, "", 262, y + 6, 0xB0B0B0, right=True))
+        mkt_abs.append(text(F_SMALL, "", 314, y + 3, 0x8C8C8C, right=True))
+        rect(268, y + 21, 46, 1, 8)
+        rect(290, y + 17, 1, 9, 6)
+        bp = displayio.Palette(1)
+        bp[0] = GREEN
+        bar = vectorio.Rectangle(pixel_shader=bp, width=1, height=5, x=290, y=y + 19)
+        bar.hidden = True
+        root.append(bar)
+        mkt_bar.append(bar)
+        mkt_barpal.append(bp)
+    rect(6, 146, 308, 1, 8)
+    mkt_ticker = Ticker(10, 151, 300, bg=0x000000, fg=AMBER, box=None)
+
+    def th_index(i, last, change, pct, is_open):
+        mkt_chg[i].text = "%+.2f%%" % pct
+        mkt_abs[i].text = "%+.2f" % change
+        mkt_dot[i][0] = GREEN if is_open else 0x4A4A4A
+        w = min(23, max(1, int(abs(pct) / 2.0 * 23 + 0.5)))      # full bar = 2 %
+        mkt_barpal[i][0] = GREEN if change >= 0 else RED
+        mkt_bar[i].width = w
+        mkt_bar[i].x = 291 if change >= 0 else 290 - w
+        mkt_bar[i].hidden = False
+
+    def show_index_error(i, msg):
+        mkt_chg[i].text = ""
+        mkt_abs[i].text = msg
+        mkt_abs[i].color = 0x8C8C8C
+        mkt_bar[i].hidden = True
+
 
 # ============================================================= NEWS SCREEN
-news_grp = displayio.Group()
-root = news_grp
+if CLASSIC:
+    news_grp = displayio.Group()
+    root = news_grp
 
-text(F_TITLE, "NEWS", 5, 4, GREYS[1])
-lbl_ncount = text(F_TITLE, "", 62, 4, GREYS[5])           # "3/10"
-lbl_nclock = text(F_TITLE, "--:--", 315, 4, GREYS[4], right=True)
-# progress bar: one segment per headline, the current one lit
-NEWS_COUNT = max(1, min(15, int(os.getenv("NEWS_COUNT") or "10")))
-news_seg = []
-_sw = (310 - (NEWS_COUNT - 1) * 2) // NEWS_COUNT
-for i in range(NEWS_COUNT):
-    news_seg.append(vectorio.Rectangle(pixel_shader=pal, width=_sw, height=3,
-                                       x=5 + i * (_sw + 2), y=28, color_index=9))
-    root.append(news_seg[i])
-# headline: 4 lines at 24 px, or 5 lines at 20 px when it is long
-NEWS_TOP, NEWS_BOT, NEWS_W = 36, 147, 310
-news_big = [text(F_NEWS, "", 5, 0, GREYS[0]) for _ in range(4)]
-news_med = [text(F_NEWS2, "", 5, 0, GREYS[0]) for _ in range(5)]
-lbl_nsrc = text(F_SMALL, "", 5, 158, GREYS[4])
-lbl_nfoot = text(F_SMALL, "", 315, 158, GREYS[6], right=True)
+    text(F_TITLE, "NEWS", 5, 4, GREYS[1])
+    lbl_ncount = text(F_TITLE, "", 62, 4, GREYS[5])           # "3/10"
+    lbl_nclock = text(F_TITLE, "--:--", 315, 4, GREYS[4], right=True)
+    # progress bar: one segment per headline, the current one lit
+    NEWS_COUNT = max(1, min(15, int(os.getenv("NEWS_COUNT") or "10")))
+    news_seg = []
+    _sw = (310 - (NEWS_COUNT - 1) * 2) // NEWS_COUNT
+    for i in range(NEWS_COUNT):
+        news_seg.append(vectorio.Rectangle(pixel_shader=pal, width=_sw, height=3,
+                                           x=5 + i * (_sw + 2), y=28, color_index=9))
+        root.append(news_seg[i])
+    # headline: 4 lines at 24 px, or 5 lines at 20 px when it is long
+    NEWS_TOP, NEWS_BOT, NEWS_W = 36, 147, 310
+    news_big = [text(F_NEWS, "", 5, 0, GREYS[0]) for _ in range(4)]
+    news_med = [text(F_NEWS2, "", 5, 0, GREYS[0]) for _ in range(5)]
+    lbl_nsrc = text(F_SMALL, "", 5, 158, GREYS[4])
+    lbl_nfoot = text(F_SMALL, "", 315, 158, GREYS[6], right=True)
+else:
+    # Lower third: red story tag, big white headline, progress dots.
+    news_grp = displayio.Group()
+    root = news_grp
+    news_bg = Backdrop(root)
+    news_bg.colours((0x0C1A3A, 0x08122A, 0x04070F))
+    tag = displayio.Palette(1)
+    tag[0] = 0xD7192A
+    root.append(vectorio.Rectangle(pixel_shader=tag, width=104, height=23, x=0, y=0))
+    root.append(vectorio.Rectangle(pixel_shader=tag, width=3, height=106, x=7, y=38))
+    text(F_TITLE, "TOP STORY", 7, 4, WHITE)
+    lbl_ncount = text(F_TITLE, "", 112, 4, 0x8FA3C7)
+    lbl_nclock = text(F_TITLE, "--:--", 314, 4, 0x8FA3C7, right=True)
+    NEWS_COUNT = max(1, min(15, int(os.getenv("NEWS_COUNT") or "10")))
+    news_seg = []
+    for i in range(NEWS_COUNT):
+        dot = vectorio.Circle(pixel_shader=pal, radius=2, x=314 - (NEWS_COUNT - 1 - i) * 9, y=161,
+                              color_index=9)
+        root.append(dot)
+        news_seg.append(dot)
+    SEG_COLS = (I_WHITE, 6, 9)
+    NEWS_TOP, NEWS_BOT, NEWS_W, NEWS_X = 30, 150, 298, 17
+    news_big = [text(F_NEWS, "", NEWS_X, 0, WHITE) for _ in range(4)]
+    news_med = [text(F_NEWS2, "", NEWS_X, 0, WHITE) for _ in range(5)]
+    lbl_nsrc = text(F_SMALL, "", 8, 156, 0xFF5A66)
+    lbl_nfoot = Ghost()
+
 
 # ============================================================= ANALOG CLOCK SCREEN
 # Big analog clock; also used (dark and dimmed) as the night screen.
-clock_grp = displayio.Group()
-root = clock_grp
+if CLASSIC:
+    clock_grp = displayio.Group()
+    root = clock_grp
 
-big_clock = AnalogClock(root, 86, 85, 80, numbers=True)
-lbl_cday = text(F_TITLE, "", 180, 8, GREYS[1])
-lbl_cdate = text(F_TIME, "", 180, 28, GREYS[0])
-lbl_cyear = text(F_SMALL, "", 182, 64, GREYS[5])
-lbl_ctemp = text(F_MED, "", 180, 84, GREYS[2])
-lbl_cdesc = text(F_SMALL, "", 182, 106, GREYS[5])
-lbl_cpct = text(F_SMALL, "", 182, 128, GREYS[6])
-day_bar = displayio.Bitmap(130, 5, 3)
-day_pal = displayio.Palette(3)
-day_pal[0], day_pal[1], day_pal[2] = GREYS[9], GREEN, GREYS[10]
-root.append(displayio.TileGrid(day_bar, pixel_shader=day_pal, x=182, y=146))
-CLK_TEXT = (lbl_cday, lbl_cdate, lbl_cyear, lbl_ctemp, lbl_cdesc, lbl_cpct)
-CLK_DAY_COL = (GREYS[1], GREYS[0], GREYS[5], GREYS[2], GREYS[5], GREYS[6])
-night_mode = False
+    big_clock = AnalogClock(root, 86, 85, 80, numbers=True)
+    lbl_cday = text(F_TITLE, "", 180, 8, GREYS[1])
+    lbl_cdate = text(F_TIME, "", 180, 28, GREYS[0])
+    lbl_cyear = text(F_SMALL, "", 182, 64, GREYS[5])
+    lbl_ctemp = text(F_MED, "", 180, 84, GREYS[2])
+    lbl_cdesc = text(F_SMALL, "", 182, 106, GREYS[5])
+    lbl_cpct = text(F_SMALL, "", 182, 128, GREYS[6])
+    day_bar = displayio.Bitmap(130, 5, 3)
+    day_pal = displayio.Palette(3)
+    day_pal[0], day_pal[1], day_pal[2] = GREYS[9], GREEN, GREYS[10]
+    root.append(displayio.TileGrid(day_bar, pixel_shader=day_pal, x=182, y=146))
+    CLK_TEXT = (lbl_cday, lbl_cdate, lbl_cyear, lbl_ctemp, lbl_cdesc, lbl_cpct)
+    CLK_DAY_COL = (GREYS[1], GREYS[0], GREYS[5], GREYS[2], GREYS[5], GREYS[6])
+    night_mode = False
 
 
-def clock_theme(night):
-    if night:
-        big_clock.colours(0x000000, 0x1A1A1A, 0x262626, 0x5A5A5A, 0x6A6A6A, 0x7A7A7A, 0x6A1A1A,
-                          numbers=0x444444)
-        for lbl in CLK_TEXT:
-            lbl.color = 0x4A4A4A
-        day_pal[0], day_pal[1] = 0x141414, 0x1E4A2E
-    else:
-        big_clock.colours(0x0C0C0C, 0x4A4A4A, 0x6A6A6A, 0xE6E6E6, 0xE0E0E0, 0xFFFFFF, 0xFF4848,
-                          numbers=0xB4B4B4)
-        for lbl, col in zip(CLK_TEXT, CLK_DAY_COL):
-            lbl.color = col
-        day_pal[0], day_pal[1] = GREYS[9], GREEN
+    def clock_theme(night):
+        if night:
+            big_clock.colours(0x000000, 0x1A1A1A, 0x262626, 0x5A5A5A, 0x6A6A6A, 0x7A7A7A, 0x6A1A1A,
+                              numbers=0x444444)
+            for lbl in CLK_TEXT:
+                lbl.color = 0x4A4A4A
+            day_pal[0], day_pal[1] = 0x141414, 0x1E4A2E
+        else:
+            big_clock.colours(0x0C0C0C, 0x4A4A4A, 0x6A6A6A, 0xE6E6E6, 0xE0E0E0, 0xFFFFFF, 0xFF4848,
+                              numbers=0xB4B4B4)
+            for lbl, col in zip(CLK_TEXT, CLK_DAY_COL):
+                lbl.color = col
+            day_pal[0], day_pal[1] = GREYS[9], GREEN
+else:
+    # Station clock by day (white Swiss face, red "lollipop" seconds hand);
+    # warm amber at night so the bedroom isn't lit blue.
+    clock_grp = displayio.Group()
+    root = clock_grp
+    big_clock = AnalogClock(root, 86, 85, 80, numbers=True, tip=True, blunt=True)
+    lbl_cday = text(F_TITLE, "", 180, 8, GREYS[1])
+    lbl_cdate = text(F_TIME, "", 180, 28, GREYS[0])
+    lbl_cyear = text(F_SMALL, "", 182, 64, GREYS[5])
+    lbl_ctemp = text(F_MED, "", 180, 84, GREYS[2])
+    lbl_cdesc = text(F_SMALL, "", 182, 106, GREYS[5])
+    lbl_cpct = text(F_SMALL, "", 182, 128, GREYS[6])
+    day_bar = displayio.Bitmap(130, 5, 3)
+    day_pal = displayio.Palette(3)
+    day_pal[0], day_pal[1], day_pal[2] = GREYS[9], GREEN, GREYS[10]
+    root.append(displayio.TileGrid(day_bar, pixel_shader=day_pal, x=182, y=146))
+    CLK_TEXT = (lbl_cday, lbl_cdate, lbl_cyear, lbl_ctemp, lbl_cdesc, lbl_cpct)
+    CLK_DAY_COL = (0xFFFFFF, 0xFFFFFF, 0x9A9A9A, 0xE0E0E0, 0x9A9A9A, 0x8A8A8A)
+    night_mode = False
 
+    def clock_theme(night):
+        if night:
+            big_clock.colours(0x000000, 0x1C1000, 0x2A1A04, 0x6A4208, 0x8A5A12, 0xA0691A, 0x6A1A08,
+                              numbers=0x5A3A0A)
+            for lbl in CLK_TEXT:
+                lbl.color = 0x6A4612
+            day_pal[0], day_pal[1] = 0x140C02, 0x5A3A0A
+        else:
+            big_clock.colours(0xF6F6F2, 0x8A8F96, 0x3A3D42, 0x111111, 0x111111, 0x111111, 0xD22630,
+                              numbers=0x111111)
+            for lbl, col in zip(CLK_TEXT, CLK_DAY_COL):
+                lbl.color = col
+            day_pal[0], day_pal[1] = 0x2A2A2A, 0xD22630
 
 DAYS = ("MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY")
 MONTHS = ("JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC")
@@ -497,8 +1138,9 @@ def clock_minute(t):
     if int(130 * frac):
         bitmaptools.fill_region(day_bar, 0, 0, int(130 * frac), 5, 1)
     wx_daybar.fill(0)
-    if int(72 * frac):
-        bitmaptools.fill_region(wx_daybar, 0, 0, int(72 * frac), 3, 1)
+    if int(wx_daybar.width * frac):
+        bitmaptools.fill_region(wx_daybar, 0, 0, int(wx_daybar.width * frac), 3, 1)
+    th_minute(t)
 
 
 clock_theme(False)
@@ -617,6 +1259,7 @@ def get_weather():
     weather_msg = "%s  #Feels like %.1f C  #Pressure %d hPa" % (
         WMO.get(cur["weather_code"], "Weather"), cur["apparent_temperature"],
         cur["pressure_msl"])
+    th_weather(cur, d)
 
 
 def get_air():
@@ -626,6 +1269,7 @@ def get_air():
     tile_vals[2].text = "%d" % cur["pm2_5"]
     air_msg = "#PM2.5 %d  #PM10 %d  #AQI %d (US)" % (
         cur["pm2_5"], cur["pm10"], cur["us_aqi"])
+    th_air(cur)
 
 
 # ------------------------------------------------------------- Kite
@@ -663,6 +1307,7 @@ def show_login_needed(reason):
     lbl_tot_pct.color = GREYS[1]
     port_ticker.set("#%s  #Open http://%s:%d on your phone to log in to Kite"
                     % (reason, MY_IP, LOGIN_PORT))
+    th_port(None)
 
 
 def get_portfolio():
@@ -694,7 +1339,8 @@ def get_portfolio():
     lbl_day.text = inr(day, signed=True)
     lbl_day.color = GREEN if day >= 0 else RED
     base = current - day
-    lbl_day_pct.text = "%+.2f%%" % (day / base * 100 if base else 0)
+    day_pct = day / base * 100 if base else 0
+    lbl_day_pct.text = "%+.2f%%" % day_pct
     lbl_day_pct.color = lbl_day.color
     lbl_tot.text = inr(total, signed=True)
     lbl_tot.color = GREEN if total >= 0 else RED
@@ -703,6 +1349,8 @@ def get_portfolio():
     port_tiles[0].text = inr(invested)
     port_tiles[1].text = inr(current)
     port_tiles[2].text = "%d" % len(movers)
+    th_port((day, day_pct, total, total / invested * 100 if invested else 0,
+             invested, current, len(movers)))
 
     movers.sort()
     parts = ["%s %+.1f%%" % (s, p) for p, s in reversed(movers[-3:]) if p > 0]
@@ -746,6 +1394,7 @@ def show_index(i, last, change, pct, is_open):
     mkt_chg[i].color = GREEN if change >= 0 else RED
     mkt_state[i].text = "OPEN" if is_open else "CLOSED"
     mkt_state[i].color = GREEN if is_open else GREYS[6]
+    th_index(i, last, change, pct, is_open)
 
 
 def mkt_ticker_refresh():
@@ -770,8 +1419,7 @@ def get_fmp(which):
         if not q or "price" not in q:
             msg = d.get("Error Message") if isinstance(d, dict) else "no data"
             problems.append("%s: %s" % (ix["name"], (msg or "no data")[:70]))
-            mkt_chg[i].text = "no data from FMP"
-            mkt_chg[i].color = GREYS[6]
+            show_index_error(i, "no data from FMP")
             continue
         pct = q.get("changePercentage", q.get("changesPercentage", 0)) or 0
         show_index(i, q["price"], q.get("change", 0) or 0, pct, is_open)
@@ -802,8 +1450,7 @@ def get_yahoo_india():
         except Exception as e:  # noqa: BLE001
             why = ("HTTP %s" % status) if status not in (None, 200) else repr(e)[:40]
             problems.append("%s: Yahoo %s" % (ix["name"], why))
-            mkt_chg[i].text = "no data (Yahoo)"
-            mkt_chg[i].color = GREYS[6]
+            show_index_error(i, "no data (Yahoo)")
             continue
         show_index(i, last, last - prev, (last - prev) / prev * 100 if prev else 0, is_open)
     mkt_notes["yahoo"] = "  #".join(problems)
@@ -879,6 +1526,7 @@ def show_match(m):
         cric_score[i].color = GREYS[0] if live else GREYS[3]
         if live:
             cric_overs[i].text += "  BATTING"
+        th_team(i, teams[i], live)
     cric_ticker.set("#%s  #%s  #API hits today %s" % (
         m.get("status") or "", m.get("venue") or "", cric_hits) + stamp())
 
@@ -1001,6 +1649,8 @@ def show_rss(item):
             cric_team[i].text, cric_score[i].text, cric_overs[i].text = "", "", ""
         cric_team[0].text = "?"
         lbl_clive.text = ""
+        th_team(0, "", False)
+        th_team(1, "", False)
         return
     any_bat = False
     names = []
@@ -1015,6 +1665,7 @@ def show_rss(item):
         info = known.get(team.lower()) or known.get(abbrev(team).lower()) or overs or team[:24]
         cric_overs[i].text = info + ("  BATTING" if bat else "")
         cric_team[i].color = cric_score[i].color = GREYS[0] if bat else GREYS[3]
+        th_team(i, team, bat)
     lbl_clive.text, lbl_clive.color = ("LIVE", RED) if any_bat else ("", GREYS[5])
     lbl_cname.text = cric_detail.get("batters") or (names[0] + " v " + names[1])[:52]
 
@@ -1330,7 +1981,7 @@ def _put_lines(labels, font, rows, pitch):
     top = NEWS_TOP + (NEWS_BOT - NEWS_TOP - pitch * len(rows)) // 2
     for i, lbl in enumerate(labels):
         lbl.text = rows[i] if i < len(rows) else ""
-        lbl.anchored_position = (5, top + i * pitch)
+        lbl.anchored_position = (NEWS_X, top + i * pitch)
 
 
 def show_news():
@@ -1338,7 +1989,7 @@ def show_news():
     n = len(news_items)
     k = news_page % n if n else 0
     for i, seg in enumerate(news_seg):
-        seg.color_index = 1 if (n and i == k) else (7 if i < n else 10)
+        seg.color_index = SEG_COLS[0] if (n and i == k) else (SEG_COLS[1] if i < n else SEG_COLS[2])
     if not n:
         lbl_ncount.text = ""
         _put_lines(news_med, F_NEWS2, [], 22)
@@ -1473,9 +2124,11 @@ def home(request: Request):
     body = body.replace("</body>", '<p style="margin-top:32px"><a href="/cricket" '
                         'style="background:#444">Pick cricket match</a></p>'
                         '<p style="margin-top:16px"><a href="/rotate?on=%d" style="background:#444">'
-                        'Auto-rotate screens: %s (tap to turn %s)</a></p></body>'
+                        'Auto-rotate screens: %s (tap to turn %s)</a></p>'
+                        '<p style="margin-top:16px"><a href="/theme" style="background:#444">'
+                        'Look: %s (change)</a></p></body>'
                         % (0 if auto_rotate else 1, "ON" if auto_rotate else "OFF",
-                           "off" if auto_rotate else "on"))
+                           "off" if auto_rotate else "on", THEME.upper()))
     return Response(request, body, content_type="text/html")
 
 
@@ -1492,6 +2145,28 @@ def rotate_page(request: Request):
     link = '<a href="/rotate?on=%d">Turn %s</a> &nbsp; <a href="/" style="background:#444">Back</a>' % (
         0 if auto_rotate else 1, "off" if auto_rotate else "on")
     return Response(request, PAGE.replace("Zerodha login", "Screens") % (msg, link),
+                    content_type="text/html")
+
+
+@server.route("/theme")
+def theme_page(request: Request):
+    global reboot_at
+    name = request.query_params.get("name", safe=False)
+    if name in ("aura", "classic", "default"):
+        try:
+            microcontroller.nvm[0] = {"aura": 1, "classic": 2, "default": 0}[name]
+            reboot_at = time.monotonic() + 2
+            msg = ("Switching to %s. The board restarts in a few seconds."
+                   % ("the THEME in settings.toml" if name == "default" else name.upper()))
+        except Exception as e:  # noqa: BLE001
+            msg = "Couldn't save the choice: %s" % e
+    else:
+        msg = "Current look: %s%s" % (THEME.upper(), " (chosen here)" if THEME_FROM_WEB
+                                      else " (from settings.toml)")
+    links = ('<a href="/theme?name=aura">Aura</a> &nbsp; <a href="/theme?name=classic">Classic</a>'
+             ' &nbsp; <a href="/theme?name=default" style="background:#444">Use settings.toml</a>'
+             ' &nbsp; <a href="/" style="background:#444">Back</a>')
+    return Response(request, PAGE.replace("Zerodha login", "Look") % (msg, links),
                     content_type="text/html")
 
 
@@ -1647,6 +2322,7 @@ last_fmp_in = last_fmp_us = time.monotonic()
 last_news = last_npage = time.monotonic()
 was_showing = None
 news_left = 0
+reboot_at = 0.0
 last_sec = last_min = -1
 sec_mark = time.monotonic()
 btn_was = True
@@ -1799,6 +2475,7 @@ while True:
         lbl_cclock.text = hhmm
         lbl_mclock.text = hhmm
         lbl_nclock.text = hhmm
+        th_second()
         if t.tm_min != last_min:
             last_min = t.tm_min
             clock_minute(t)
@@ -1811,4 +2488,7 @@ while True:
     tk = TICKERS.get(showing)
     if tk:
         tk.step()
+    th_frame(showing)
+    if reboot_at and now_m > reboot_at:          # theme changed on the web page
+        microcontroller.reset()
     time.sleep(0.03)

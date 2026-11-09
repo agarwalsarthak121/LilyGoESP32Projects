@@ -33,6 +33,10 @@ FMP_API_KEY = ""
 # NEWS_SECONDS = "6"          # seconds per headline
 # NEWS_PER_VISIT = "10"       # headlines shown before auto-rotate moves on
 
+# --- Look ---
+# THEME = "aura"              # "aura" (default, a style per screen) or "classic" (original grey)
+#                             # the board's web page /theme can switch it too
+
 # --- Screens and rotation ---
 # SCREEN_ORDER = "weather,portfolio,markets,cricket,news"   # add "clock" for the big clock by day
 # SCREEN_SECONDS = "15"

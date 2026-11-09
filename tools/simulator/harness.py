@@ -129,7 +129,7 @@ class Session:
         return Resp({"utc_offset_seconds": 19800,
                      "current": {"temperature_2m": 24.3, "relative_humidity_2m": 62,
                                  "pressure_msl": 1014.2, "wind_speed_10m": 2.4,
-                                 "weather_code": 45, "apparent_temperature": 25.1},
+                                 "weather_code": int(os.environ.get("WCODE", "45")), "apparent_temperature": 25.1, "is_day": int(os.environ.get("ISDAY", "1"))},
                      "hourly": {"temperature_2m": temps}})
 cm = types.ModuleType("adafruit_connection_manager")
 cm.get_radio_socketpool = lambda r: types.SimpleNamespace(getaddrinfo=lambda *a: (_ for _ in ()).throw(OSError("ntp stub")))
@@ -154,6 +154,10 @@ class Response:
 hs.Server, hs.Request, hs.Response = Server, Request, Response
 sys.modules["adafruit_httpserver"] = hs
 mc = types.ModuleType("microcontroller"); mc.pin = types.SimpleNamespace(GPIO14="GPIO14", GPIO0="GPIO0")
+mc.nvm = bytearray(b"\xff" * 64)
+def _reset():
+    print("RESET requested"); raise SystemExit
+mc.reset = _reset
 sys.modules["microcontroller"] = mc
 dio = types.ModuleType("digitalio")
 class DIO:
@@ -188,6 +192,8 @@ def fake_sleep(s):
     if calls["n"] == 6 and os.environ.get("SHOW"):
         name = {"port": "portfolio", "cric": "cricket"}.get(os.environ["SHOW"], os.environ["SHOW"])
         NS["display"].root_group = NS["ALL_SCREENS"][name]; NS["screen"] = NS["ORDER"].index(name)
+    if calls["n"] == 9 and os.environ.get("EVAL"):
+        exec(os.environ["EVAL"], NS)
     if calls["n"] == 8 and os.environ.get("NPAGE"):
         NS["news_page"] = int(os.environ["NPAGE"]); NS["show_news"]()
     if calls["n"] == 7 and os.environ.get("CRICPAGE") == "1":

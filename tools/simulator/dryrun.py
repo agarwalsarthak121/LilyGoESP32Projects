@@ -43,12 +43,15 @@ def client():
     print("[t+3s] opened+closed an empty connection (like a Chrome preconnect)")
     _sleep(2)
     print(f"[t+5s] main-loop passes: {loops['n']}")
-    for path in ["/", "/cricket/debug", "/cricket?id=off", "/kite?status=success&request_token=abc"]:
+    for path in ["/", "/cricket/debug", "/cricket?id=off", "/kite?status=success&request_token=abc", "/theme"]:
         try:
             r = urllib.request.urlopen("http://127.0.0.1:8080" + path, timeout=4)
             print(f"GET {path} -> {r.status}, {len(r.read())} bytes")
         except Exception as e:
             print(f"GET {path} -> FAILED: {e!r}")
+    # THEME TEST: choosing a look saves it to NVM and asks for a restart
+    r = urllib.request.urlopen("http://127.0.0.1:8080/theme?name=classic", timeout=4).read().decode()
+    print("theme page:", r.split("<p>")[1][:60] if "<p>" in r else r[:80], "| nvm[0] =", NS["microcontroller"].nvm[0] if "microcontroller" in NS else "?")
     # ROTATE TEST
     a = NS["screen"]; _sleep(2.5); b = NS["screen"]
     print("rotation on : screen changed", a, "->", b)
