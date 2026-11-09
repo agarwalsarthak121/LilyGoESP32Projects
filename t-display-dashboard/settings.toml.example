@@ -1,0 +1,44 @@
+# Copy this file to the board as settings.toml and fill in your own values.
+# NEVER commit your real settings.toml: it holds your Wi-Fi password and API secrets.
+# All values are strings in quotes.
+
+# --- Wi-Fi and web workflow (CircuitPython) ---
+CIRCUITPY_WIFI_SSID = "your-wifi-name"
+CIRCUITPY_WIFI_PASSWORD = "your-wifi-password"
+CIRCUITPY_WEB_API_PASSWORD = "pick-a-separate-password"   # for http://<board-ip>/code/
+CIRCUITPY_WEB_API_PORT = 80
+
+# --- Weather (Open-Meteo, no key needed) ---
+WEATHER_TOWN = "Bijnor"
+WEATHER_LAT = "29.37"
+WEATHER_LON = "78.13"
+
+# --- Zerodha portfolio (Kite Connect Personal, free) ---
+KITE_API_KEY = ""
+KITE_API_SECRET = ""
+# KITE_EVERY = "5"            # seconds between refreshes while the portfolio screen is up in market hours
+
+# --- Markets screen (US indices; free key from financialmodelingprep.com) ---
+FMP_API_KEY = ""
+
+# --- Cricket ---
+# CRICKET_SOURCE = "rss"      # "rss" = ESPNcricinfo feed (default, no key) or "cricapi"
+# CRICKET_API_KEY = ""        # only for CRICKET_SOURCE = "cricapi" (cricketdata.org)
+# CRICKET_TEAM = "India"      # auto-pick this team's live match
+# CRICKET_EVERY = "30"
+
+# --- News ---
+# NEWS_FEED = ""              # any RSS feed; default is Google News India top stories
+# NEWS_COUNT = "10"           # top headlines to cycle through (max 15)
+# NEWS_SECONDS = "6"          # seconds per headline
+# NEWS_PER_VISIT = "10"       # headlines shown before auto-rotate moves on
+
+# --- Screens and rotation ---
+# SCREEN_ORDER = "weather,portfolio,markets,cricket,news"   # add "clock" for the big clock by day
+# SCREEN_SECONDS = "15"
+# AUTO_ROTATE = "off"         # screens then change only with the KEY button
+
+# --- Night mode ---
+# NIGHT_HOURS = "23-7"        # "" turns night mode off
+# DAY_BRIGHTNESS = "0.6"
+# NIGHT_BRIGHTNESS = "0.05"

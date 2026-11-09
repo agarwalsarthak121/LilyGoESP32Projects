@@ -1,0 +1,6 @@
+# real secrets live only on the board
+settings.toml
+__pycache__/
+*.pyc
+.DS_Store
+preview.png
