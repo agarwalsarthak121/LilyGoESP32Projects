@@ -12,10 +12,35 @@ disp = PyGameDisplay(width=320, height=170, auto_refresh=False)
 board = types.ModuleType("board"); board.DISPLAY = disp
 sys.modules["board"] = board
 
+STEP = {"n": 0}                                    # loop steps (fake sleeps), shared below
+def _window(name):
+    w = os.environ.get(name)
+    if not w: return False
+    a, b = (int(x) for x in w.split("-"))
+    return a <= STEP["n"] < b
 wifi = types.ModuleType("wifi")
 class Radio:
-    connected = True
-    ipv4_address = "192.168.1.42"
+    def __init__(self):
+        self.attempts = 0
+        self.up = int(os.environ.get("WIFI_BOOT_FAILS", "0")) == 0
+        self.ip = "192.168.1.42"
+        self.was_down = False
+    @property
+    def connected(self):
+        if _window("WIFI_DOWN"):
+            self.up = False; self.was_down = True
+        return self.up
+    @property
+    def ipv4_address(self):
+        return self.ip if self.connected else None
+    def connect(self, ssid, pw, timeout=None):
+        self.attempts += 1
+        print("WIFI connect attempt %d (step %d)" % (self.attempts, STEP["n"]))
+        if self.attempts <= int(os.environ.get("WIFI_BOOT_FAILS", "0")) or _window("WIFI_DOWN"):
+            raise ConnectionError("No network with that ssid")
+        if self.was_down and os.environ.get("NEWIP"):
+            self.ip = "192.168.1.77"
+        self.up = True
 wifi.radio = Radio()
 sys.modules["wifi"] = wifi
 
@@ -50,6 +75,12 @@ class Session:
         return Resp({"status":"success","data":{"access_token":"tok123"}})
     def get(self, url, timeout=None, headers=None):
         if FAIL: raise OSError("no network")
+        if _window("NET_DOWN") or not wifi.radio.up:
+            print("REQ-FAIL step %d %s" % (STEP["n"], url.split("/")[2]))
+            raise OSError(113, "EHOSTUNREACH")
+        print("REQ step %d %s" % (STEP["n"], url.split("/")[2]))
+        if "generate_204" in url:
+            r = Resp({}); r.status_code = 204; return r
         if "kite.trade" in url:
             print("GET", url, headers["Authorization"])
             if KITE_EXPIRED:
@@ -144,6 +175,7 @@ class Server:
         def deco(fn): Server.routes[path] = fn; return fn
         return deco
     def start(self, host, port): print("server on", host, port)
+    def stop(self): print("server stopped")
     def poll(self): pass
 class QP(dict):
     def get(self, k, default=None, safe=True): return dict.get(self, k, default)
@@ -155,6 +187,22 @@ hs.Server, hs.Request, hs.Response = Server, Request, Response
 sys.modules["adafruit_httpserver"] = hs
 mc = types.ModuleType("microcontroller"); mc.pin = types.SimpleNamespace(GPIO14="GPIO14", GPIO0="GPIO0")
 mc.nvm = bytearray(b"\xff" * 64)
+NVMFILE = os.environ.get("NVMFILE")
+if NVMFILE and os.path.exists(NVMFILE):
+    mc.nvm = bytearray(open(NVMFILE, "rb").read())
+import atexit
+if NVMFILE:
+    atexit.register(lambda: open(NVMFILE, "wb").write(bytes(mc.nvm)))
+class _WD:
+    timeout = None; mode = None; feeds = 0
+    def feed(self): _WD.feeds += 1
+mc.watchdog = _WD()
+wdm = types.ModuleType("watchdog"); wdm.WatchDogMode = types.SimpleNamespace(RESET="RESET", RAISE="RAISE")
+sys.modules["watchdog"] = wdm
+sup = types.ModuleType("supervisor")
+def _sncf(f, **k): print("set_next_code_file", f, k)
+sup.set_next_code_file = _sncf
+sys.modules["supervisor"] = sup
 def _reset():
     print("RESET requested"); raise SystemExit
 mc.reset = _reset
@@ -182,6 +230,7 @@ def fake_sleep(s):
     if threading.current_thread() is not MAIN:
         return _sleep(s)
     calls["n"] += 1
+    STEP["n"] = calls["n"]
     if calls["n"] == 5 and os.environ.get("LOGIN") == "1":
         r = Server.routes["/kite"](Request({"status":"success","request_token":"rt999"}))
         print("login page:", r.body.split("<p>")[1][:80])
@@ -210,6 +259,9 @@ def fake_sleep(s):
     if calls["n"] >= N:
         raise SystemExit
 time.sleep = fake_sleep
+if os.environ.get("FASTCLOCK"):          # each loop step = FASTCLOCK seconds of board time
+    _mono = time.monotonic; _k = float(os.environ["FASTCLOCK"])
+    time.monotonic = lambda: _mono() + calls["n"] * _k
 
 src = open(BOARD + "/code.py").read()
 NS = {"__name__": "__main__"}

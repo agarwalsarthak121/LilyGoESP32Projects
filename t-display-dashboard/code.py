@@ -22,6 +22,7 @@
 #   NEWS_SECONDS="6"      (how long each headline stays up)
 #   NEWS_PER_VISIT="10"   (headlines shown before auto-rotate moves on; "2" = short visits)
 #   THEME="aura"          (a different style per screen; "classic" = the original grey look)
+#   WATCHDOG="off"        (turn off the hang watchdog, e.g. while debugging over the REPL)
 #   NIGHT_HOURS="23-7"    (dark, dim clock only at night; "" turns night mode off)
 #   DAY_BRIGHTNESS="0.6"  NIGHT_BRIGHTNESS="0.05"
 #
@@ -46,6 +47,12 @@ from adafruit_bitmap_font import bitmap_font
 from adafruit_display_text.bitmap_label import Label
 from adafruit_display_shapes.roundrect import RoundRect
 from adafruit_httpserver import Server, Request, Response
+
+try:    # if code.py ever dies with an error, restart it instead of leaving a dead screen
+    import supervisor
+    supervisor.set_next_code_file(None, reload_on_error=True)
+except Exception as _e:  # noqa: BLE001
+    print("auto-restart on error unavailable:", repr(_e))
 
 try:
     import hashlib
@@ -1221,10 +1228,70 @@ def draw_graph(temps):
         lbl_range.text = "Low %.1f  High %.1f" % (min(vals), max(vals))
 
 
+# ------------------------------------------------------------- watchdog
+# If the loop ever hangs for 2 minutes, the chip resets itself.
+WATCHDOG = (os.getenv("WATCHDOG") or "on").strip().lower() != "off"
+if WATCHDOG:
+    try:
+        from watchdog import WatchDogMode
+        try:
+            microcontroller.watchdog.timeout = 120
+        except ValueError:
+            microcontroller.watchdog.timeout = 60
+        microcontroller.watchdog.mode = WatchDogMode.RESET
+    except Exception as e:  # noqa: BLE001
+        print("watchdog unavailable:", repr(e))
+        WATCHDOG = False
+
+
+def dog():
+    if WATCHDOG:
+        try:
+            microcontroller.watchdog.feed()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 # ------------------------------------------------------------- network
-if not wifi.radio.connected:
-    wifi.radio.connect(os.getenv("CIRCUITPY_WIFI_SSID"),
-                       os.getenv("CIRCUITPY_WIFI_PASSWORD"))
+SSID = os.getenv("CIRCUITPY_WIFI_SSID")
+WIFI_PW = os.getenv("CIRCUITPY_WIFI_PASSWORD")
+NET_TIMEOUT = 8                  # seconds; short so an outage can't freeze the screen for long
+PROBE_URL = "http://connectivitycheck.gstatic.com/generate_204"
+
+
+def wifi_up():
+    try:
+        return bool(wifi.radio.connected and wifi.radio.ipv4_address)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def wifi_try(timeout=8):
+    dog()
+    try:
+        wifi.radio.connect(SSID, WIFI_PW, timeout=timeout)
+    except Exception as e:  # noqa: BLE001 - router not up yet, wrong channel...
+        print("wifi connect failed:", repr(e))
+    dog()
+    return wifi_up()
+
+
+# after a power cut the board boots long before the router: wait (and say so) instead of crashing
+if not wifi_up():
+    wait_grp = displayio.Group()
+    root = wait_grp
+    text(F_TITLE, "Waiting for Wi-Fi", 160, 62, WHITE, center=True)
+    wait_lbl = text(F_SMALL, SSID or "your Wi-Fi", 160, 92, GREYS[3], center=True)
+    text(F_SMALL, "The dashboard starts as soon as it connects", 160, 140, GREYS[6], center=True)
+    display.root_group = wait_grp
+    tries = 0
+    while not wifi_try(10):
+        tries += 1
+        wait_lbl.text = "%s  -  tried %d times" % (SSID or "your Wi-Fi", tries)
+        for _ in range(10):      # ~5 s between attempts, watchdog fed
+            dog()
+            time.sleep(0.5)
+    display.root_group = ALL_SCREENS[ORDER[0]]
 MY_IP = str(wifi.radio.ipv4_address)
 pool = adafruit_connection_manager.get_radio_socketpool(wifi.radio)
 ssl_ctx = adafruit_connection_manager.get_radio_ssl_context(wifi.radio)
@@ -1245,7 +1312,7 @@ def ntp_sync():
 
 def get_weather():
     global utc_offset, weather_msg
-    with requests.get(WEATHER_URL, timeout=15) as r:
+    with requests.get(WEATHER_URL, timeout=NET_TIMEOUT) as r:
         d = r.json()
     utc_offset = d.get("utc_offset_seconds", utc_offset)
     cur = d["current"]
@@ -1264,7 +1331,7 @@ def get_weather():
 
 def get_air():
     global air_msg
-    with requests.get(AIR_URL, timeout=15) as r:
+    with requests.get(AIR_URL, timeout=NET_TIMEOUT) as r:
         cur = r.json()["current"]
     tile_vals[2].text = "%d" % cur["pm2_5"]
     air_msg = "#PM2.5 %d  #PM10 %d  #AQI %d (US)" % (
@@ -1284,7 +1351,7 @@ def kite_login(request_token):
     checksum = hashlib.sha256(
         (KITE_KEY + request_token + KITE_SECRET).encode()).hexdigest()
     body = "api_key=%s&request_token=%s&checksum=%s" % (KITE_KEY, request_token, checksum)
-    with requests.post(KITE_API + "/session/token", data=body, timeout=15,
+    with requests.post(KITE_API + "/session/token", data=body, timeout=NET_TIMEOUT,
                        headers={"X-Kite-Version": "3",
                                 "Content-Type": "application/x-www-form-urlencoded"}) as r:
         d = r.json()
@@ -1292,11 +1359,54 @@ def kite_login(request_token):
         raise RuntimeError(d.get("message", "login failed"))
     kite_token = d["data"]["access_token"]
     kite_status = "Logged in"
+    kite_save(kite_token)
+
+
+# the day's Kite login survives restarts: kept in NVM until it expires (~07:30 next morning)
+KITE_NVM = 8      # nvm[8] "K", [9:13] expiry (local epoch), [13] length, [14:] token
+
+
+def kite_save(tok):
+    try:
+        now = int(time.time())
+        lt = time.localtime(now)
+        exp = now - (lt.tm_hour * 3600 + lt.tm_min * 60 + lt.tm_sec) + 7 * 3600 + 1800
+        if now >= exp:
+            exp += 86400
+        b = tok.encode()[:48]
+        microcontroller.nvm[KITE_NVM:KITE_NVM + 6 + len(b)] = (
+            b"K" + struct.pack("<I", exp) + bytes([len(b)]) + b)
+    except Exception as e:  # noqa: BLE001
+        print("couldn't save Kite login:", repr(e))
+
+
+def kite_forget():
+    try:
+        if microcontroller.nvm[KITE_NVM] == ord("K"):
+            microcontroller.nvm[KITE_NVM] = 0
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def kite_load():
+    try:
+        nv = microcontroller.nvm
+        if nv[KITE_NVM] != ord("K"):
+            return None
+        exp = struct.unpack("<I", bytes(nv[KITE_NVM + 1:KITE_NVM + 5]))[0]
+        tok = bytes(nv[KITE_NVM + 6:KITE_NVM + 6 + nv[KITE_NVM + 5]]).decode()
+        if time.localtime().tm_year >= 2024 and time.time() >= exp:   # clock is right and it's stale
+            kite_forget()
+            return None
+        return tok
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def show_login_needed(reason):
     global kite_token, kite_status
     kite_token = None
+    kite_forget()
     kite_status = reason
     lbl_day.text = "--"
     lbl_tot.text = "--"
@@ -1312,7 +1422,7 @@ def show_login_needed(reason):
 
 def get_portfolio():
     with requests.get(KITE_API + "/portfolio/holdings", headers=kite_headers(),
-                      timeout=20) as r:
+                      timeout=NET_TIMEOUT) as r:
         status = r.status_code
         d = r.json()
     if status == 403 or d.get("error_type") == "TokenException":
@@ -1413,7 +1523,7 @@ def get_fmp(which):
     for i, ix in enumerate(INDICES):
         if ix["mkt"] != which:
             continue
-        with requests.get(FMP_URL % (ix["fmp"].replace("^", "%5E"), FMP_KEY), timeout=20) as r:
+        with requests.get(FMP_URL % (ix["fmp"].replace("^", "%5E"), FMP_KEY), timeout=NET_TIMEOUT) as r:
             d = r.json()
         q = d[0] if isinstance(d, list) and d else None
         if not q or "price" not in q:
@@ -1441,13 +1551,15 @@ def get_yahoo_india():
             continue
         status = None
         try:
-            with requests.get(YAHOO_URL % ix["yahoo"], headers=YAHOO_HDR, timeout=20) as r:
+            with requests.get(YAHOO_URL % ix["yahoo"], headers=YAHOO_HDR, timeout=NET_TIMEOUT) as r:
                 status = r.status_code
                 d = r.json() if status == 200 else {}
             meta = d["chart"]["result"][0]["meta"]
             last = meta["regularMarketPrice"]
             prev = meta.get("chartPreviousClose") or meta.get("previousClose") or last
         except Exception as e:  # noqa: BLE001
+            if status is None and _net_error(e):
+                raise                  # network trouble: keep the last values, let safe() notice
             why = ("HTTP %s" % status) if status not in (None, 200) else repr(e)[:40]
             problems.append("%s: Yahoo %s" % (ix["name"], why))
             show_index_error(i, "no data (Yahoo)")
@@ -1473,7 +1585,7 @@ cric_hits = ""
 def cric_get(path):
     global cric_hits
     url = CRIC_API + path + ("&" if "?" in path else "?") + "apikey=" + CRIC_KEY
-    with requests.get(url, timeout=20) as r:
+    with requests.get(url, timeout=NET_TIMEOUT) as r:
         d = r.json()
     info = d.get("info") or {}
     if "hitsToday" in info:
@@ -1590,7 +1702,7 @@ def _match_id(link):
 
 def rss_items():
     hdr = {"User-Agent": "Mozilla/5.0 (T-Display-S3 desk scoreboard; RSS reader)"}
-    with requests.get(RSS_URL, headers=hdr, timeout=15) as r:
+    with requests.get(RSS_URL, headers=hdr, timeout=NET_TIMEOUT) as r:
         xml = r.text
     items = []
     for chunk in xml.split("<item")[1:]:
@@ -1767,7 +1879,7 @@ def get_cricket_detail(item):
     cric_debug.update({"url": url, "rss_title": item["title"], "rss_desc": item.get("desc", ""),
                        "rss_link": item["link"]})
     body_parts, size = [], 0
-    with requests.get(url, headers=CI_HDR, timeout=20) as r:
+    with requests.get(url, headers=CI_HDR, timeout=NET_TIMEOUT) as r:
         cric_debug["status"] = r.status_code
         if r.status_code != 200:
             cric_detail = {}
@@ -1877,7 +1989,7 @@ def _read_items(url, limit=20):
     hdr = {"User-Agent": "Mozilla/5.0 (T-Display-S3 desk dashboard; RSS reader)",
            "Accept": "application/rss+xml, application/xml, text/xml"}
     items, buf = [], b""
-    with requests.get(url, headers=hdr, timeout=20) as r:
+    with requests.get(url, headers=hdr, timeout=NET_TIMEOUT) as r:
         if r.status_code != 200:
             raise RuntimeError("HTTP %d" % r.status_code)
         for chunk in r.iter_content(chunk_size=2048):
@@ -1911,10 +2023,13 @@ def _read_items(url, limit=20):
 def get_news():
     global news_items, news_at, news_page, news_from, news_msg
     errors = []
+    net_err = None
     for url in (NEWS_URL,) + NEWS_FALLBACKS:
         try:
             items = _read_items(url, NEWS_COUNT)[:NEWS_COUNT]
         except Exception as e:  # noqa: BLE001
+            if _net_error(e):
+                net_err = e
             errors.append("%s: %s" % (url.split("/")[2], repr(e)[:40]))
             print("news failed:", errors[-1])
             free_sockets()
@@ -1933,6 +2048,8 @@ def get_news():
         news_msg = ("News failed: " + errors[0])[:60] if errors else "No headlines right now"
         show_news()
     print("news errors:", errors)
+    if net_err is not None:
+        raise net_err                  # every source failed and the network looks down
 
 
 def px_width(font, t):
@@ -2024,17 +2141,142 @@ def free_sockets():
         pass
 
 
+net_state = "ok"           # "ok", "nowifi" (Wi-Fi lost) or "noinet" (Wi-Fi fine, internet down)
+fail_streak = 0
+need_probe = False
+refresh_all = False
+
+
+def _net_error(e):
+    """True for errors that smell like 'no network' rather than a bad reply."""
+    if isinstance(e, (OSError, getattr(adafruit_requests, "OutOfRetries", OSError))):
+        return True
+    n = type(e).__name__.lower()
+    return "timeout" in n or "connection" in n or "gaierror" in n
+
+
 def safe(fn, name, free=True):
+    global fail_streak, need_probe
+    if net_state != "ok":       # offline: skip instead of freezing on a doomed request
+        return False
+    dog()
     try:
         fn()
+        fail_streak = 0
         return True
     except Exception as e:  # noqa: BLE001 - keep the dashboard running
         print(name, "failed:", repr(e))
         free_sockets()          # a broken connection: start fresh next time
+        if _net_error(e):
+            fail_streak += 1
+            if fail_streak >= 2:
+                need_probe = True   # two network errors in a row: is the internet down?
         return False
     finally:
+        dog()
         if free:
             free_sockets()
+
+
+def internet_ok():
+    dog()
+    try:
+        with requests.get(PROBE_URL, timeout=5) as r:
+            return r.status_code in (200, 204)
+    except Exception as e:  # noqa: BLE001
+        print("internet check failed:", repr(e))
+        return False
+    finally:
+        free_sockets()
+        dog()
+
+
+# offline badge, one per screen (bottom-left; on the clock screen under the day bar)
+net_badges = []
+for _name, _grp in ALL_SCREENS.items():
+    _bx, _by = (182, 153) if _name == "clock" else (6, 148)
+    _g = displayio.Group()
+    _g.append(RoundRect(_bx, _by, 62, 16, 4, fill=0xC62828))
+    _l = Label(terminalio.FONT, text="OFFLINE", color=0xFFFFFF, anchor_point=(0.5, 0.5),
+               anchored_position=(_bx + 31, _by + 8))
+    _g.append(_l)
+    _g.hidden = True
+    _grp.append(_g)
+    net_badges.append((_g, _l))
+
+
+def show_badge(msg):
+    for g, lbl in net_badges:
+        lbl.text = msg or "OFFLINE"
+        g.hidden = not msg
+
+
+offline_since = 0.0
+last_reconnect = last_probe = 0.0
+reconnect_wait = 10
+
+
+def set_offline(state, now_m):
+    global net_state, offline_since, reconnect_wait
+    if net_state == "ok":
+        offline_since = now_m
+    net_state = state
+    reconnect_wait = 10
+    show_badge("NO WI-FI" if state == "nowifi" else "OFFLINE")
+    print("network:", state)
+
+
+def back_online():
+    """Wi-Fi/internet is back: restart the web page if needed and refresh everything."""
+    global net_state, fail_streak, refresh_all, MY_IP
+    ip = str(wifi.radio.ipv4_address)
+    try:                        # the old listening socket died with the Wi-Fi link
+        server.stop()
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        server.start(ip, port=LOGIN_PORT)
+    except Exception as e:  # noqa: BLE001
+        print("web page restart failed:", repr(e))
+    if ip != MY_IP:
+        print("new IP address:", ip)
+        MY_IP = ip
+    free_sockets()
+    net_state = "ok"
+    fail_streak = 0
+    refresh_all = True
+    show_badge(None)
+    print("network: back online at", ip)
+
+
+def net_tick(now_m):
+    """Every few seconds: notice outages, reconnect Wi-Fi, check the internet."""
+    global need_probe, last_probe, last_reconnect, reconnect_wait, fail_streak
+    if not wifi_up():
+        if net_state != "nowifi":
+            set_offline("nowifi", now_m)
+        if now_m - last_reconnect > reconnect_wait:
+            last_reconnect = now_m
+            reconnect_wait = min(60, reconnect_wait * 2)    # 10 s, 20 s, 40 s, then every minute
+            if wifi_try(8):
+                back_online()
+                return
+        if now_m - offline_since > 20 * 60:     # Wi-Fi stack stuck? a clean restart fixes it
+            print("no Wi-Fi for 20 min - restarting")
+            microcontroller.reset()
+        return
+    if net_state == "nowifi":                   # Wi-Fi came back by itself
+        back_online()
+        return
+    if need_probe or (net_state == "noinet" and now_m - last_probe > 30):
+        need_probe = False
+        last_probe = now_m
+        if internet_ok():
+            fail_streak = 0
+            if net_state != "ok":
+                back_online()
+        elif net_state != "noinet":
+            set_offline("noinet", now_m)
 
 
 # ------------------------------------------------------------- login web page
@@ -2294,13 +2536,22 @@ except Exception as e:  # noqa: BLE001 - pin busy on some builds
 boot_was = True
 
 # ------------------------------------------------------------- start-up
+if not internet_ok():            # Wi-Fi up but no internet: don't stall on every start-up fetch
+    set_offline("noinet", time.monotonic())
 weather_ticker.set("Fetching weather for " + TOWN + "...")
 safe(get_weather, "weather")
 safe(ntp_sync, "ntp")
 safe(get_air, "air")
 weather_ticker.set("#" + weather_msg + "  " + air_msg + stamp())
 if KITE_KEY and KITE_SECRET:
-    show_login_needed("Kite login needed")
+    kite_token = kite_load()
+    if kite_token:               # still today's login, kept from before the restart
+        kite_status = "Logged in (kept across restart)"
+        port_ticker.set("#Restoring today's Kite login...")
+        if not safe(get_portfolio, "kite") and kite_token:
+            port_ticker.set("#Kite login kept - waiting for the network")
+    else:
+        show_login_needed("Kite login needed")
 else:
     port_ticker.set("#" + kite_status)
 if CRIC_TEAM and (CRIC_RSS or CRIC_KEY):
@@ -2328,167 +2579,191 @@ sec_mark = time.monotonic()
 btn_was = True
 night_now = False
 wake_until = 0.0             # a button press at night shows other screens for a while
+last_netcheck = time.monotonic()
+loop_errors = []
 
 # ------------------------------------------------------------- main loop
 while True:
-    now_m = time.monotonic()
+    try:
+        now_m = time.monotonic()
+        dog()
+        if now_m - last_netcheck > 5:
+            last_netcheck = now_m
+            net_tick(now_m)
+        if refresh_all:              # just back online: refresh every screen now
+            refresh_all = False
+            last_weather = last_air = last_ntp = last_kite = last_cric = last_pick = -1e6
+            last_fmp_in = last_fmp_us = last_news = -1e6
+            last_cdetail = 0.0
 
-    if now_m - last_weather > WEATHER_EVERY:
-        last_weather = now_m
-        ok = safe(get_weather, "weather")
-        counter = (counter + 1) % 100
-        lbl_counter.text = str(counter)
-        if now_m - last_air > AIR_EVERY:
-            last_air = now_m
-            safe(get_air, "air")
-        if now_m - last_ntp > NTP_EVERY:
-            last_ntp = now_m
-            safe(ntp_sync, "ntp")
-        weather_ticker.set(("#" + weather_msg + "  " + air_msg) if ok
-                           else "#Update failed - will retry  " + weather_msg)
+        if now_m - last_weather > WEATHER_EVERY:
+            last_weather = now_m
+            ok = safe(get_weather, "weather")
+            counter = (counter + 1) % 100
+            lbl_counter.text = str(counter)
+            if now_m - last_air > AIR_EVERY:
+                last_air = now_m
+                safe(get_air, "air")
+            if now_m - last_ntp > NTP_EVERY:
+                last_ntp = now_m
+                safe(ntp_sync, "ntp")
+            weather_ticker.set(("#" + weather_msg + "  " + air_msg) if ok
+                               else "#Update failed - will retry  " + weather_msg)
 
-    if market_open():
-        every = KITE_EVERY_FAST if ORDER[screen] == "portfolio" else KITE_EVERY_OPEN
-    else:
-        every = KITE_EVERY_CLOSED
-    if kite_token and now_m - last_kite > every:
-        last_kite = now_m
-        # keep the Kite connection open between fast refreshes
-        if not safe(get_portfolio, "kite", free=(every > 30)):
-            port_ticker.set("#Portfolio update failed - will retry" + stamp())
+        if market_open():
+            every = KITE_EVERY_FAST if ORDER[screen] == "portfolio" else KITE_EVERY_OPEN
+        else:
+            every = KITE_EVERY_CLOSED
+        if kite_token and now_m - last_kite > every:
+            last_kite = now_m
+            # keep the Kite connection open between fast refreshes
+            if not safe(get_portfolio, "kite", free=(every > 30)):
+                port_ticker.set("#Portfolio update failed - will retry" + stamp())
 
-    if cric_id and not cric_ended:
-        every = CRIC_EVERY if (CRIC_RSS or lbl_clive.text == "LIVE") else 15 * 60
-        if now_m - last_cric > every:
-            last_cric = now_m
-            safe(get_cricket, "cricket")
-        if CRIC_RSS and cric_item and now_m - last_cdetail > (60 if ORDER[screen] == "cricket" else 180):
-            last_cdetail = now_m
-            safe(lambda: get_cricket_detail(cric_item), "cricket detail")
-    elif CRIC_TEAM and (CRIC_RSS or CRIC_KEY) and now_m - last_pick > (5 if CRIC_RSS else 30) * 60:
-        last_pick = now_m            # look for this team's next match
-        safe(auto_pick, "cricket")
+        if cric_id and not cric_ended:
+            every = CRIC_EVERY if (CRIC_RSS or lbl_clive.text == "LIVE") else 15 * 60
+            if now_m - last_cric > every:
+                last_cric = now_m
+                safe(get_cricket, "cricket")
+            if CRIC_RSS and cric_item and now_m - last_cdetail > (60 if ORDER[screen] == "cricket" else 180):
+                last_cdetail = now_m
+                safe(lambda: get_cricket_detail(cric_item), "cricket detail")
+        elif CRIC_TEAM and (CRIC_RSS or CRIC_KEY) and now_m - last_pick > (5 if CRIC_RSS else 30) * 60:
+            last_pick = now_m            # look for this team's next match
+            safe(auto_pick, "cricket")
 
-    # market indices
-    showing = ORDER[screen]
-    # India (Yahoo): 1 min while the markets screen is up in market hours
-    if market_open():
-        every = 60 if showing == "markets" else 600
-    else:
-        every = 3600
-    if now_m - last_fmp_in > every:
-        last_fmp_in = now_m
-        safe(get_yahoo_india, "yahoo")
-    # FMP free plan = 250 calls/day: 12 min while the US market is open, hourly otherwise
-    if now_m - last_fmp_us > (12 * 60 if us_market_open() else 3600):
-        last_fmp_us = now_m
-        safe(lambda: get_fmp("us"), "fmp")
+        # market indices
+        showing = ORDER[screen]
+        # India (Yahoo): 1 min while the markets screen is up in market hours
+        if market_open():
+            every = 60 if showing == "markets" else 600
+        else:
+            every = 3600
+        if now_m - last_fmp_in > every:
+            last_fmp_in = now_m
+            safe(get_yahoo_india, "yahoo")
+        # FMP free plan = 250 calls/day: 12 min while the US market is open, hourly otherwise
+        if now_m - last_fmp_us > (12 * 60 if us_market_open() else 3600):
+            last_fmp_us = now_m
+            safe(lambda: get_fmp("us"), "fmp")
 
-    # news: refresh every 15 min (headline flipping happens next to the screen switching)
-    if now_m - last_news > (NEWS_EVERY if news_items else 120):
-        last_news = now_m
-        safe(get_news, "news")
+        # news: refresh every 15 min (headline flipping happens next to the screen switching)
+        if now_m - last_news > (NEWS_EVERY if news_items else 120):
+            last_news = now_m
+            safe(get_news, "news")
 
-    # handle a few queued connections per pass (browsers open several at once)
-    for _ in range(4):
-        try:
-            if server.poll() == "no_request":
+        # handle a few queued connections per pass (browsers open several at once)
+        for _ in range(4):
+            try:
+                if server.poll() == "no_request":
+                    break
+            except Exception as e:  # noqa: BLE001
+                print("login page error:", repr(e))
                 break
-        except Exception as e:  # noqa: BLE001
-            print("login page error:", repr(e))
-            break
 
-    t = time.localtime()
+        t = time.localtime()
 
-    # night mode: dark, dim clock only (a button press wakes other screens for 60 s)
-    night = is_night(t)
-    if night != night_now:
-        night_now = night
-        clock_theme(night)
-        set_brightness(NIGHT_BRIGHT if night else DAY_BRIGHT)
-        if night:
-            screen = ORDER.index("clock") if "clock" in ORDER else screen
-            display.root_group = clock_grp
-            showing = "clock"
-        else:                       # morning: back to the normal rotation
+        # night mode: dark, dim clock only (a button press wakes other screens for 60 s)
+        night = is_night(t)
+        if night != night_now:
+            night_now = night
+            clock_theme(night)
+            set_brightness(NIGHT_BRIGHT if night else DAY_BRIGHT)
+            if night:
+                screen = ORDER.index("clock") if "clock" in ORDER else screen
+                display.root_group = clock_grp
+                showing = "clock"
+            else:                       # morning: back to the normal rotation
+                display.root_group = ALL_SCREENS[ORDER[screen]]
+                showing = ORDER[screen]
+
+        # screen switching: KEY button cycles every screen in SCREEN_ORDER;
+        # the automatic rotation skips screens with nothing to show
+        pressed = not button.value
+        switch = pressed and btn_was
+        btn_was = not pressed
+        if switch:
+            wake_until = now_m + 60
+        # news: next headline every NEWS_SECONDS (or on the BOOT button); with auto-rotate on,
+        # the news screen moves on after NEWS_PER_VISIT headlines instead of SCREEN_SECONDS
+        news_done = False
+        if showing == "news":
+            boot_down = boot is not None and not boot.value
+            skip = boot_down and boot_was
+            boot_was = not boot_down
+            if skip or now_m - last_npage > NEWS_SECONDS:
+                last_npage = now_m
+                news_page += 1
+                news_left -= 1
+                if auto_rotate and news_left <= 0 and not skip:
+                    news_done = True              # leave; the next visit starts at this headline
+                else:
+                    show_news()
+        if showing == "news":
+            auto = auto_rotate and news_done
+        else:
+            auto = auto_rotate and now_m - last_switch > SCREEN_SECONDS
+        if night_now and not switch:
+            auto = False
+            if now_m > wake_until:            # not woken by the button: stay on the clock
+                if display.root_group is not clock_grp:
+                    display.root_group = clock_grp
+                showing = "clock"
+        if switch or auto:
+            last_switch = now_m
+            was_showing = None            # (re)entering a screen restarts its news count
+            for _ in range(len(ORDER)):
+                screen = (screen + 1) % len(ORDER)
+                name = ORDER[screen]
+                if switch:
+                    break
+                if name == "cricket" and not cric_id:
+                    continue
+                if name == "markets" and not FMP_KEY:
+                    continue
+                break
             display.root_group = ALL_SCREENS[ORDER[screen]]
             showing = ORDER[screen]
-
-    # screen switching: KEY button cycles every screen in SCREEN_ORDER;
-    # the automatic rotation skips screens with nothing to show
-    pressed = not button.value
-    switch = pressed and btn_was
-    btn_was = not pressed
-    if switch:
-        wake_until = now_m + 60
-    # news: next headline every NEWS_SECONDS (or on the BOOT button); with auto-rotate on,
-    # the news screen moves on after NEWS_PER_VISIT headlines instead of SCREEN_SECONDS
-    news_done = False
-    if showing == "news":
-        boot_down = boot is not None and not boot.value
-        skip = boot_down and boot_was
-        boot_was = not boot_down
-        if skip or now_m - last_npage > NEWS_SECONDS:
+        if showing == "news" and was_showing != "news":
+            news_left = min(NEWS_PER_VISIT, max(1, len(news_items)))
             last_npage = now_m
-            news_page += 1
-            news_left -= 1
-            if auto_rotate and news_left <= 0 and not skip:
-                news_done = True              # leave; the next visit starts at this headline
-            else:
-                show_news()
-    if showing == "news":
-        auto = auto_rotate and news_done
-    else:
-        auto = auto_rotate and now_m - last_switch > SCREEN_SECONDS
-    if night_now and not switch:
-        auto = False
-        if now_m > wake_until:            # not woken by the button: stay on the clock
-            if display.root_group is not clock_grp:
-                display.root_group = clock_grp
-            showing = "clock"
-    if switch or auto:
-        last_switch = now_m
-        was_showing = None            # (re)entering a screen restarts its news count
-        for _ in range(len(ORDER)):
-            screen = (screen + 1) % len(ORDER)
-            name = ORDER[screen]
-            if switch:
-                break
-            if name == "cricket" and not cric_id:
-                continue
-            if name == "markets" and not FMP_KEY:
-                continue
-            break
-        display.root_group = ALL_SCREENS[ORDER[screen]]
-        showing = ORDER[screen]
-    if showing == "news" and was_showing != "news":
-        news_left = min(NEWS_PER_VISIT, max(1, len(news_items)))
-        last_npage = now_m
-        show_news()
-    was_showing = showing
+            show_news()
+        was_showing = showing
 
-    if t.tm_sec != last_sec:
-        last_sec = t.tm_sec
-        sec_mark = now_m
-        hhmm = "%02d:%02d" % (t.tm_hour, t.tm_min)
-        lbl_pclock.text = hhmm
-        lbl_cclock.text = hhmm
-        lbl_mclock.text = hhmm
-        lbl_nclock.text = hhmm
-        th_second()
-        if t.tm_min != last_min:
-            last_min = t.tm_min
-            clock_minute(t)
+        if t.tm_sec != last_sec:
+            last_sec = t.tm_sec
+            sec_mark = now_m
+            hhmm = "%02d:%02d" % (t.tm_hour, t.tm_min)
+            lbl_pclock.text = hhmm
+            lbl_cclock.text = hhmm
+            lbl_mclock.text = hhmm
+            lbl_nclock.text = hhmm
+            th_second()
+            if t.tm_min != last_min:
+                last_min = t.tm_min
+                clock_minute(t)
 
-    frac = min(0.99, time.monotonic() - sec_mark)
-    if showing == "weather":
-        wx_clock.update(t.tm_hour, t.tm_min, t.tm_sec, frac)
-    elif showing == "clock":
-        big_clock.update(t.tm_hour, t.tm_min, t.tm_sec, frac)
-    tk = TICKERS.get(showing)
-    if tk:
-        tk.step()
-    th_frame(showing)
-    if reboot_at and now_m > reboot_at:          # theme changed on the web page
+        frac = min(0.99, time.monotonic() - sec_mark)
+        if showing == "weather":
+            wx_clock.update(t.tm_hour, t.tm_min, t.tm_sec, frac)
+        elif showing == "clock":
+            big_clock.update(t.tm_hour, t.tm_min, t.tm_sec, frac)
+        tk = TICKERS.get(showing)
+        if tk:
+            tk.step()
+        th_frame(showing)
+        if reboot_at and now_m > reboot_at:          # theme changed on the web page
+            microcontroller.reset()
+        time.sleep(0.03)
+    except MemoryError as e:
+        print("out of memory:", repr(e))
+        free_sockets()
         microcontroller.reset()
-    time.sleep(0.03)
+    except Exception as e:  # noqa: BLE001 - one bad update must not kill the dashboard
+        t_err = time.monotonic()
+        print("loop error:", repr(e))
+        loop_errors = [x for x in loop_errors if t_err - x < 60] + [t_err]
+        if len(loop_errors) > 10:            # failing over and over: start clean
+            print("too many errors - restarting")
+            microcontroller.reset()
+        time.sleep(0.5)

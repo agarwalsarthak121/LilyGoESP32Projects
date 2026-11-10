@@ -98,6 +98,7 @@ Everything is configured in `settings.toml`; see [`settings.toml.example`](setti
 | `NEWS_SECONDS` / `NEWS_PER_VISIT` | `6` / `10` | Seconds per headline / headlines per visit |
 | `NIGHT_HOURS` | `23-7` | Night clock hours (`""` turns it off) |
 | `DAY_BRIGHTNESS` / `NIGHT_BRIGHTNESS` | `0.6` / `0.05` | Backlight levels |
+| `WATCHDOG` | on | `off` disables the 2-minute hang watchdog (handy while debugging) |
 
 ## How it works
 
@@ -107,12 +108,29 @@ Everything is configured in `settings.toml`; see [`settings.toml.example`](setti
 - The aura backgrounds are one 320×170 bitmap per screen with a 32-colour palette (16 gradient shades plus 16 darker "glass" shades for the cards), ordered-dithered so there's no banding. Changing the sky or the P&L mood only rewrites the palette, which is instant.
 - Refresh rates are tuned to the free API limits: weather every 10 min, Kite every 5 s on screen in market hours, cricket every 30 s, Indian indices every 60 s on screen, US indices every 12 min (FMP allows 250 calls a day), news every 15 min.
 
+## Outages and power cuts
+
+The dashboard is built to look after itself:
+
+| What happens | What the board does |
+|---|---|
+| **Power cut** (the board boots before the router) | Shows "Waiting for Wi-Fi" and keeps retrying, then starts normally. |
+| **Wi-Fi drops** (router restart) | Shows a red **NO WI-FI** badge and reconnects (after 10 s, 20 s, 40 s, then every minute). If the router hands out a new IP, the web page moves to it. After 20 minutes without Wi-Fi it restarts itself in case the Wi-Fi chip is stuck. |
+| **Internet down, Wi-Fi fine** | After two failed requests it checks a tiny Google test page. If that fails too, it shows **OFFLINE**, stops trying the data sources (so the clock never freezes), and re-checks every 30 s. Screens keep their last values. |
+| **Back online** | Every screen refreshes at once and the badge disappears. |
+| **Unexpected error** | Logged and skipped. More than 10 errors in a minute restarts the board. If `code.py` ever stops with an error, CircuitPython restarts it. |
+| **Total hang** | The chip's watchdog resets the board after 2 minutes. Set `WATCHDOG = "off"` while debugging over the serial REPL. |
+| **Kite login** | Kept on the board (NVM) until it expires around 07:30, so a restart mid-day doesn't log you out. |
+
+Requests time out after 8 seconds. Tip: reserve the board's IP address in your router so the web page's address never changes.
+
 ## Troubleshooting
 
 | Symptom | Fix |
 |---|---|
 | Portfolio shows `--` | Do the daily Kite login at `http://<board-ip>:8080` |
-| Page at port 8080 won't open | Make sure your phone is on the same Wi-Fi; wait a few seconds and retry |
+| Page at port 8080 won't open | Make sure your phone is on the same Wi-Fi; wait a few seconds and retry. After a router restart the board may have a new IP (shown in the Portfolio ticker and on the serial console) |
+| Red OFFLINE / NO WI-FI badge | The board noticed an outage; it clears itself when the connection is back |
 | `no module named ...` on the serial console | Copy the whole `lib/` folder again |
 | News says "News failed" | The error names the feed and HTTP status; it retries every 2 minutes |
 | Cricket score but no overs/batters | Check `/cricket/debug` |

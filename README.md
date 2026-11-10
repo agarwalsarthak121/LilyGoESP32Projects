@@ -46,6 +46,8 @@ python tools/simulator/dryrun.py                              # real web server 
 
 Useful variables for `harness.py`: `SHOW` (weather, port, markets, cric, news, clock), `THEME` (aura, classic), `FAKE_HOUR` (e.g. 23 for night mode), `WCODE` and `ISDAY` (Open-Meteo weather code and day/night, to preview skies), `LOGIN=1` (fake Kite login), `STEPS`, `OUT`.
 
+Outage testing: `WIFI_BOOT_FAILS=3` (router slower than the board), `WIFI_DOWN=100-250` and `NEWIP=1` (Wi-Fi drop between loop steps, new IP after), `NET_DOWN=100-400` (internet down, Wi-Fi fine), `FASTCLOCK=1` (each loop step counts as 1 s of board time), `NVMFILE=nvm.bin` (keep the board's NVM between runs, e.g. to test the saved Kite login), `EVAL='...'` (run code inside the dashboard at step 9).
+
 ## Making fonts
 
 ```bash

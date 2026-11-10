@@ -42,6 +42,9 @@ FMP_API_KEY = ""
 # SCREEN_SECONDS = "15"
 # AUTO_ROTATE = "off"         # screens then change only with the KEY button
 
+# --- Reliability ---
+# WATCHDOG = "off"            # disable the 2-minute hang watchdog (e.g. while using the REPL)
+
 # --- Night mode ---
 # NIGHT_HOURS = "23-7"        # "" turns night mode off
 # DAY_BRIGHTNESS = "0.6"
