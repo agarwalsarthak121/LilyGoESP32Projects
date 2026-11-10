@@ -37,6 +37,7 @@
 import os
 import time
 import struct
+import json
 import random
 import ipaddress
 import board
@@ -55,6 +56,37 @@ from adafruit_display_text.bitmap_label import Label
 from adafruit_display_shapes.roundrect import RoundRect
 from adafruit_httpserver import Server, Request, Response
 
+# ------------------------------------------------------------- settings store
+# settings.toml holds the defaults. Anything changed on the board's Settings page
+# (http://<board>:8080/settings) is kept in NVM and wins over settings.toml.
+CFG_NVM = 128        # nvm[128:130] = length, then the settings as JSON
+
+
+def _load_cfg():
+    try:
+        nv = microcontroller.nvm
+        n = nv[CFG_NVM] | (nv[CFG_NVM + 1] << 8)
+        if 2 <= n <= 3000:
+            return json.loads(bytes(nv[CFG_NVM + 2:CFG_NVM + 2 + n]).decode())
+    except Exception as e:  # noqa: BLE001
+        print("settings in NVM unreadable:", repr(e))
+    return {}
+
+
+CFG = _load_cfg()
+
+
+def cfg(key):
+    """A setting: the Settings page's value if set there, else settings.toml's."""
+    v = CFG.get(key)
+    return os.getenv(key) if v is None else v
+
+
+def save_cfg():
+    b = json.dumps(CFG).encode()
+    microcontroller.nvm[CFG_NVM:CFG_NVM + 2 + len(b)] = bytes([len(b) & 255, len(b) >> 8]) + b
+
+
 try:    # if code.py ever dies with an error, restart it instead of leaving a dead screen
     import supervisor
     supervisor.set_next_code_file(None, reload_on_error=True)
@@ -68,16 +100,16 @@ except Exception:  # noqa: BLE001 - fall back to the pure-Python version
     import adafruit_hashlib as hashlib
 
 # ------------------------------------------------------------- settings
-TOWN = os.getenv("WEATHER_TOWN") or "Delhi"
-LAT = os.getenv("WEATHER_LAT") or "28.61"
-LON = os.getenv("WEATHER_LON") or "77.21"
+TOWN = cfg("WEATHER_TOWN") or "Delhi"
+LAT = cfg("WEATHER_LAT") or "28.61"
+LON = cfg("WEATHER_LON") or "77.21"
 KITE_KEY = os.getenv("KITE_API_KEY") or ""
 KITE_SECRET = os.getenv("KITE_API_SECRET") or ""
-SCREEN_SECONDS = int(os.getenv("SCREEN_SECONDS") or "15")
-auto_rotate = (os.getenv("AUTO_ROTATE") or "on").strip().lower() not in ("off", "0", "no", "false") \
+SCREEN_SECONDS = int(cfg("SCREEN_SECONDS") or "15")
+auto_rotate = (cfg("AUTO_ROTATE") or "on").strip().lower() not in ("off", "0", "no", "false") \
     and SCREEN_SECONDS > 0
 CRIC_KEY = os.getenv("CRICKET_API_KEY") or ""
-CRIC_TEAM = (os.getenv("CRICKET_TEAM") or "").lower()
+CRIC_TEAM = (cfg("CRICKET_TEAM") or "").lower()
 # cricket source: "rss" = ESPNcricinfo live-scores feed (free, no key, ~30 s refresh)
 #                 "cricapi" = CricketData.org (needs key, 100 hits/day)
 CRIC_SOURCE = (os.getenv("CRICKET_SOURCE") or "rss").lower()
@@ -1067,7 +1099,7 @@ if CLASSIC:
     lbl_ncount = text(F_TITLE, "", 62, 4, GREYS[5])           # "3/10"
     lbl_nclock = text(F_TITLE, "--:--", 315, 4, GREYS[4], right=True)
     # progress bar: one segment per headline, the current one lit
-    NEWS_COUNT = max(1, min(15, int(os.getenv("NEWS_COUNT") or "10")))
+    NEWS_COUNT = max(1, min(15, int(cfg("NEWS_COUNT") or "10")))
     news_seg = []
     _sw = (310 - (NEWS_COUNT - 1) * 2) // NEWS_COUNT
     for i in range(NEWS_COUNT):
@@ -1093,7 +1125,7 @@ else:
     text(F_TITLE, "TOP STORY", 7, 4, WHITE)
     lbl_ncount = text(F_TITLE, "", 112, 4, 0x8FA3C7)
     lbl_nclock = text(F_TITLE, "--:--", 314, 4, 0x8FA3C7, right=True)
-    NEWS_COUNT = max(1, min(15, int(os.getenv("NEWS_COUNT") or "10")))
+    NEWS_COUNT = max(1, min(15, int(cfg("NEWS_COUNT") or "10")))
     news_seg = []
     for i in range(NEWS_COUNT):
         dot = vectorio.Circle(pixel_shader=pal, radius=2, x=314 - (NEWS_COUNT - 1 - i) * 9, y=161,
@@ -1300,14 +1332,21 @@ port_day_pct = None             # today's portfolio move, set by get_portfolio (
 # A player's international numbers for this year, from ESPNcricinfo Statsguru.
 # STAT_PLAYERS = "253802:Virat Kohli,625383:Jasprit Bumrah:bowl"  (Cricinfo player id:name[:bowl])
 # The BOOT button moves to the next player. Without data it shows a cricket fact instead.
-STAT_PLAYERS = []
-for _p in (os.getenv("STAT_PLAYERS") or
-           "253802:Virat Kohli,34102:Rohit Sharma,625383:Jasprit Bumrah:bowl,"
-           "1070173:Shubman Gill").split(","):
-    _f = [x.strip() for x in _p.split(":")]
-    if len(_f) >= 2 and _f[0].isdigit():
-        STAT_PLAYERS.append((_f[0], _f[1], len(_f) > 2 and _f[2].lower().startswith("bowl")))
-STAT_CLASS = os.getenv("STAT_CLASS") or "11"          # 11 all internationals, 1 Tests, 2 ODIs, 3 T20Is
+STAT_DEFAULT = ("253802:Virat Kohli,34102:Rohit Sharma,625383:Jasprit Bumrah:bowl,"
+                "1070173:Shubman Gill")
+
+
+def parse_players(text_):
+    out = []
+    for p in (text_ or STAT_DEFAULT).split(","):
+        f = [x.strip() for x in p.split(":")]
+        if len(f) >= 2 and f[0].isdigit():
+            out.append((f[0], f[1], len(f) > 2 and f[2].lower().startswith("bowl")))
+    return out
+
+
+STAT_PLAYERS = parse_players(cfg("STAT_PLAYERS"))
+STAT_CLASS = cfg("STAT_CLASS") or "11"          # 11 all internationals, 1 Tests, 2 ODIs, 3 T20Is
 STAT_URL = ("https://stats.espncricinfo.com/ci/engine/player/%s.html"
             "?class=%s;template=results;type=%s;view=year")
 STAT_FORMAT = {"1": "Tests", "2": "ODIs", "3": "T20Is", "11": "internationals"}.get(STAT_CLASS, "matches")
@@ -1641,7 +1680,7 @@ EXTRA["heatmap"] = heat_screen
 # ------------------------------------------------------------- internet health
 # Ping to the internet and the router, Wi-Fi signal, a speed test of the board's own
 # download speed, router uptime over UPnP (if the router allows it) and the outage log.
-PING_HOST = os.getenv("PING_HOST") or "1.1.1.1"
+PING_HOST = cfg("PING_HOST") or "1.1.1.1"
 SPEED_URL = "https://speed.cloudflare.com/__down?bytes=400000"
 net_log = []          # (wall time it went down, wall time it came back)
 net_down_at = None
@@ -1669,7 +1708,7 @@ class NetScreen(Screen):
         self.pill = RoundRect(112, 5, 70, 15, 4, fill=0x1E9E50)
         root.append(self.pill)
         self.pill_lbl = text(F_SMALL, "ONLINE", 147, 12, WHITE, center=True)
-        text(F_SMALL, "PING " + PING_HOST, 8, 26, 0x8A9099)
+        self.ping_lbl = text(F_SMALL, "PING " + PING_HOST, 8, 26, 0x8A9099)
         self.ping = text(F_NEWS, "--", 8, 36, WHITE)
         self.ping_sub = text(F_SMALL, "", 8, 68, 0x8A9099)
         self.g = displayio.Bitmap(self.N * 3, 46, 5)
@@ -1863,9 +1902,9 @@ EXTRA["net"] = net_screen
 # early, then moves on. Questions come from trivia_india.txt on the board (about 240 India
 # questions - add your own lines). TRIVIA_SOURCE="world" uses Open Trivia DB instead,
 # "mix" alternates the two.
-TRIVIA_SECONDS = max(5, int(os.getenv("TRIVIA_SECONDS") or "30"))
+TRIVIA_SECONDS = max(5, int(cfg("TRIVIA_SECONDS") or "30"))
 TRIVIA_REVEAL = 8
-TRIVIA_SOURCE = (os.getenv("TRIVIA_SOURCE") or "india").strip().lower()
+TRIVIA_SOURCE = (cfg("TRIVIA_SOURCE") or "india").strip().lower()
 TRIVIA_FILE = os.getenv("TRIVIA_FILE") or "/trivia_india.txt"
 TRIVIA_CATEGORY = os.getenv("TRIVIA_CATEGORY") or ""     # Open Trivia DB id, for "world"/"mix"
 TRIVIA_FALLBACK = (
@@ -2062,7 +2101,7 @@ EXTRA["trivia"] = trivia_screen
 # A little sprout creature. Its leaf and face follow today's portfolio move, it gets
 # hungry if nobody presses BOOT (feed) for a while, and it sleeps at night.
 # Kept in NVM: birthday, last meal and number of meals.
-PET_NAME = (os.getenv("PET_NAME") or "Moong")[:10]
+PET_NAME = (cfg("PET_NAME") or "Moong")[:10]
 PET_NVM = 64          # nvm[64] "P", [65:69] born, [69:73] last fed, [73:75] meals
 PCOL = (0, 0xF6C177, 0xD99A55, 0x5A3A22, 0x1B1B1B, 0xFFFFFF, 0xFF8FA3, 0x7A2E2E,
         0x5BD16B, 0x2E8B3E, 0xA8834A, 0x6EC6FF, 0xE0A030, 0xFF4D6D)
@@ -2509,7 +2548,7 @@ EXTRA["matrix"] = MatrixRain((314, 150), 0x1A6A30)
 EXTRA["fire"] = Fire((314, 4), 0x5A3A2A)
 EXTRA["stars"] = Stars((314, 150), 0x4A5068)
 SAVERS = ("matrix", "fire", "stars")
-NIGHT_SCREEN = (os.getenv("NIGHT_SCREEN") or "clock").strip().lower()
+NIGHT_SCREEN = (cfg("NIGHT_SCREEN") or "clock").strip().lower()
 EXTRA_LIST = list(EXTRA.values())
 
 
@@ -2529,18 +2568,35 @@ for _n, _s in EXTRA.items():
     ALL_SCREENS[_n] = _s.grp
 TICKERS = {"weather": weather_ticker, "portfolio": port_ticker, "markets": mkt_ticker,
            "cricket": cric_ticker}
-ORDER = [n.strip() for n in (os.getenv("SCREEN_ORDER") or
-                             "weather,portfolio,heatmap,markets,cricket,stat,news,trivia,net,pet"
-                             ).split(",")
-         if n.strip() in ALL_SCREENS] or ["weather"]
+DEFAULT_ORDER = "weather,portfolio,heatmap,markets,cricket,stat,news,trivia,net,pet"
+
+
+def parse_order(text_):
+    out = []
+    for n in (text_ or DEFAULT_ORDER).split(","):
+        n = n.strip()
+        if n in ALL_SCREENS and n not in out:
+            out.append(n)
+    return out or ["weather"]
+
+
+def parse_night(text_):
+    """'23-7' -> (23, 7); '' -> None (night mode off)."""
+    p = ("23-7" if text_ is None else text_).split("-")
+    try:
+        return (int(p[0]) % 24, int(p[1]) % 24) if len(p) == 2 and p[0].strip() else None
+    except ValueError:
+        return None
+
+
+ORDER = parse_order(cfg("SCREEN_ORDER"))
 screen = 0
 display.root_group = ALL_SCREENS[ORDER[0]]
 
 # night mode: only the dimmed dark clock between NIGHT_HOURS (e.g. "23-7"; "" = off)
-_nh = (os.getenv("NIGHT_HOURS") if os.getenv("NIGHT_HOURS") is not None else "23-7").split("-")
-NIGHT = (int(_nh[0]), int(_nh[1])) if len(_nh) == 2 and _nh[0].strip() else None
-DAY_BRIGHT = float(os.getenv("DAY_BRIGHTNESS") or "0.6")
-NIGHT_BRIGHT = float(os.getenv("NIGHT_BRIGHTNESS") or "0.05")
+NIGHT = parse_night(cfg("NIGHT_HOURS"))
+DAY_BRIGHT = float(cfg("DAY_BRIGHTNESS") or "0.6")
+NIGHT_BRIGHT = float(cfg("NIGHT_BRIGHTNESS") or "0.05")
 
 
 def set_brightness(v):
@@ -3324,8 +3380,8 @@ news_page = 0
 news_at = ""
 news_from = "Google News"
 news_msg = "Loading headlines..."
-NEWS_SECONDS = max(2, int(os.getenv("NEWS_SECONDS") or "6"))
-NEWS_PER_VISIT = max(1, int(os.getenv("NEWS_PER_VISIT") or "10"))
+NEWS_SECONDS = max(2, int(cfg("NEWS_SECONDS") or "6"))
+NEWS_PER_VISIT = max(1, int(cfg("NEWS_PER_VISIT") or "10"))
 _ASCII = (("‘", "'"), ("’", "'"), ("“", '"'), ("”", '"'), ("–", "-"),
           ("—", "-"), ("…", "..."), ("₹", "Rs "), (" ", " "), ("&#39;", "'"),
           ("&quot;", '"'), ("&amp;", "&"))
@@ -3703,7 +3759,8 @@ def home(request: Request):
                 '<form action="/kite"><input name=url style="width:100%%;padding:10px">'
                 '<p><button style="padding:10px 18px">Send to board</button></p></form>')
         body = PAGE % ("Status: " + kite_status, link + form)
-    body = body.replace("</body>", '<p style="margin-top:32px"><a href="/cricket" '
+    body = body.replace("</body>", '<p style="margin-top:32px"><a href="/settings">Settings</a></p>'
+                        '<p style="margin-top:16px"><a href="/cricket" '
                         'style="background:#444">Pick cricket match</a></p>'
                         '<p style="margin-top:16px"><a href="/rotate?on=%d" style="background:#444">'
                         'Auto-rotate screens: %s (tap to turn %s)</a></p>'
@@ -3721,6 +3778,11 @@ def rotate_page(request: Request):
     global auto_rotate, last_switch
     on = request.query_params.get("on", safe=False)
     if on in ("0", "1"):
+        CFG["AUTO_ROTATE"] = "on" if on == "1" else "off"
+        try:
+            save_cfg()
+        except Exception:  # noqa: BLE001
+            pass
         auto_rotate = on == "1" and SCREEN_SECONDS > 0
         last_switch = time.monotonic()
     msg = ("Auto-rotate is ON: screens change every %d s (the KEY button still works)." % SCREEN_SECONDS
@@ -3776,6 +3838,297 @@ def stat_debug(request: Request):
                     ("Player: %s" % (esc(p[1]) if p else "none set"),
                      "<pre style='white-space:pre-wrap'>%s</pre>" % esc(stat_screen.debug)),
                     content_type="text/html")
+
+
+# ------------------------------------------------------------- settings page
+SCREEN_LABELS = {"weather": "Weather", "portfolio": "Portfolio", "heatmap": "Holdings heatmap",
+                 "markets": "Markets", "cricket": "Cricket", "stat": "Stat of the day",
+                 "news": "News", "trivia": "Trivia", "net": "Internet", "pet": "Pet",
+                 "clock": "Big clock", "matrix": "Matrix rain", "fire": "Fire", "stars": "Starfield"}
+RESTART_KEYS = ("WEATHER_TOWN", "WEATHER_LAT", "WEATHER_LON", "TRIVIA_SOURCE", "PET_NAME", "NEWS_COUNT")
+force_show = None            # the loop switches to this screen on its next pass
+
+
+def _num(v, lo, hi, default, is_float=False):
+    try:
+        x = float(v) if is_float else int(float(v))
+    except (TypeError, ValueError):
+        return default
+    return max(lo, min(hi, x))
+
+
+def set_order(names):
+    """Use a new screen order straight away (and move off a screen that was turned off)."""
+    global ORDER, screen, force_show
+    cur = ORDER[screen] if 0 <= screen < len(ORDER) else None
+    ORDER = parse_order(",".join(names))
+    if cur in ORDER:
+        screen = ORDER.index(cur)
+    else:
+        screen = 0
+        force_show = ORDER[0]
+
+
+def apply_cfg():
+    """Apply everything that can change without a restart."""
+    global SCREEN_SECONDS, auto_rotate, NIGHT, DAY_BRIGHT, NIGHT_BRIGHT, NIGHT_SCREEN, \
+        NEWS_SECONDS, NEWS_PER_VISIT, TRIVIA_SECONDS, CRIC_TEAM, STAT_PLAYERS, STAT_CLASS, PING_HOST
+    SCREEN_SECONDS = _num(cfg("SCREEN_SECONDS") or "15", 3, 3600, 15)
+    auto_rotate = (cfg("AUTO_ROTATE") or "on").strip().lower() not in ("off", "0", "no", "false")
+    NIGHT = parse_night(cfg("NIGHT_HOURS"))
+    DAY_BRIGHT = _num(cfg("DAY_BRIGHTNESS") or "0.6", 0.02, 1.0, 0.6, True)
+    NIGHT_BRIGHT = _num(cfg("NIGHT_BRIGHTNESS") or "0.05", 0.01, 1.0, 0.05, True)
+    set_brightness(NIGHT_BRIGHT if night_now else DAY_BRIGHT)
+    NIGHT_SCREEN = (cfg("NIGHT_SCREEN") or "clock").strip().lower()
+    NEWS_SECONDS = _num(cfg("NEWS_SECONDS") or "6", 2, 120, 6)
+    NEWS_PER_VISIT = _num(cfg("NEWS_PER_VISIT") or "10", 1, 50, 10)
+    TRIVIA_SECONDS = _num(cfg("TRIVIA_SECONDS") or "30", 5, 300, 30)
+    TriviaScreen.dwell = TRIVIA_SECONDS + TRIVIA_REVEAL + 1
+    CRIC_TEAM = (cfg("CRICKET_TEAM") or "").lower()
+    STAT_PLAYERS = parse_players(cfg("STAT_PLAYERS"))
+    STAT_CLASS = cfg("STAT_CLASS") or "11"
+    stat_screen.refresh()
+    PING_HOST = cfg("PING_HOST") or "1.1.1.1"
+    net_screen.ping_lbl.text = "PING " + PING_HOST
+    set_order(parse_order(cfg("SCREEN_ORDER")))
+
+
+SET_PAGE = """<!doctype html><html><head><meta name=viewport content="width=device-width">
+<title>Dashboard settings</title><style>
+body{font-family:sans-serif;background:#111;color:#ddd;padding:16px;max-width:560px;margin:auto}
+h2{margin:4px 0 12px}h3{margin:22px 0 8px;color:#8ab4f8;font-size:15px;text-transform:uppercase}
+a{color:#8ab4f8}.row{display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid #222}
+.row .name{flex:1}.pill{padding:4px 10px;border-radius:12px;text-decoration:none;font-size:13px;color:#fff}
+.on{background:#1e9e50}.off{background:#555}.arr{text-decoration:none;font-size:18px;padding:0 6px}
+.show{font-size:13px}label{display:block;margin:10px 0}
+input,select{background:#222;color:#eee;border:1px solid #444;border-radius:6px;padding:8px;font-size:15px}
+input[type=number]{width:90px}input[type=text]{width:100%%;box-sizing:border-box}
+input[type=checkbox]{transform:scale(1.4);margin-right:10px}
+button{background:#387ed1;color:#fff;border:0;border-radius:8px;padding:12px 18px;font-size:16px;margin:16px 8px 0 0}
+.note{background:#2a2a14;border-left:4px solid #e0b020;padding:10px;margin:10px 0}
+small{color:#888}</style></head><body><h2>Dashboard settings</h2>%s</body></html>"""
+
+
+def _opt(options, cur):
+    return "".join('<option value="%s"%s>%s</option>' % (v, " selected" if str(v) == str(cur) else "", t)
+                   for v, t in options)
+
+
+def settings_html(msg=""):
+    out = ['<div class=note>%s</div>' % msg] if msg else []
+    out.append('<p><a href="/">&larr; Back</a></p><h3>Screens</h3>'
+               '<small>Tap ON/OFF to include a screen, arrows to reorder, "show" to jump to it.</small>')
+    for i, n in enumerate(ORDER):
+        out.append('<div class=row><a class="pill on" href="/settings/screen?n=%s&op=off">ON</a>'
+                   '<span class=name>%d. %s</span>'
+                   '<a class=arr href="/settings/screen?n=%s&op=up">&#9650;</a>'
+                   '<a class=arr href="/settings/screen?n=%s&op=down">&#9660;</a>'
+                   '<a class=show href="/settings/screen?n=%s&op=show">show</a></div>'
+                   % (n, i + 1, SCREEN_LABELS.get(n, n), n, n, n))
+    for n in ALL_SCREENS:
+        if n not in ORDER:
+            out.append('<div class=row><a class="pill off" href="/settings/screen?n=%s&op=on">OFF</a>'
+                       '<span class=name>%s</span></div>' % (n, SCREEN_LABELS.get(n, n)))
+    hours = [(h, "%02d:00" % h) for h in range(24)]
+    nf, nt = NIGHT if NIGHT else (23, 7)
+    v = lambda k, d="": esc(str(cfg(k) if cfg(k) is not None else d))  # noqa: E731
+    out.append('<form action="/settings/save">')
+    out.append('<h3>Rotation</h3>'
+               '<label><input type=checkbox name=AUTO_ROTATE value=on%s>Change screens automatically</label>'
+               '<label>Seconds per screen <input type=number name=SCREEN_SECONDS min=3 max=3600 value=%d></label>'
+               % (" checked" if auto_rotate else "", SCREEN_SECONDS))
+    out.append('<h3>Night mode</h3>'
+               '<label><input type=checkbox name=NIGHT_ON value=1%s>Dim night screen</label>'
+               '<label>From <select name=NIGHT_FROM>%s</select> to <select name=NIGHT_TO>%s</select></label>'
+               '<label>Night screen <select name=NIGHT_SCREEN>%s</select></label>'
+               '<label>Night brightness <input type=number step=0.01 min=0.01 max=1 name=NIGHT_BRIGHTNESS value=%s></label>'
+               '<small>KEY still wakes the other screens for a minute at night.</small>'
+               % (" checked" if NIGHT else "", _opt(hours, nf), _opt(hours, nt),
+                  _opt((("clock", "Analog clock"), ("matrix", "Matrix rain"), ("fire", "Fire"),
+                        ("stars", "Starfield"), ("cycle", "A different one each hour")), NIGHT_SCREEN),
+                  NIGHT_BRIGHT))
+    out.append('<h3>Look</h3>'
+               '<label>Theme <select name=THEME>%s</select> <small>(restarts the board)</small></label>'
+               '<label>Day brightness <input type=number step=0.05 min=0.05 max=1 name=DAY_BRIGHTNESS value=%s></label>'
+               % (_opt((("aura", "Aura"), ("classic", "Classic")), THEME), DAY_BRIGHT))
+    out.append('<h3>News</h3>'
+               '<label>Seconds per headline <input type=number name=NEWS_SECONDS min=2 max=120 value=%d></label>'
+               '<label>Headlines per visit <input type=number name=NEWS_PER_VISIT min=1 max=50 value=%d></label>'
+               '<label>Headlines to cycle through <input type=number name=NEWS_COUNT min=1 max=15 value=%d>'
+               ' <small>(restart)</small></label>' % (NEWS_SECONDS, NEWS_PER_VISIT, NEWS_COUNT))
+    out.append('<h3>Trivia</h3>'
+               '<label>Seconds to answer <input type=number name=TRIVIA_SECONDS min=5 max=300 value=%d></label>'
+               '<label>Questions <select name=TRIVIA_SOURCE>%s</select> <small>(restart)</small></label>'
+               % (TRIVIA_SECONDS, _opt((("india", "India (trivia_india.txt)"), ("world", "World (Open Trivia DB)"),
+                                       ("mix", "Mix of both")), TRIVIA_SOURCE)))
+    out.append('<h3>Cricket</h3>'
+               '<label>Follow this team automatically <input type=text name=CRICKET_TEAM value="%s"'
+               ' placeholder="e.g. India"></label>'
+               '<label>Stat of the day players <input type=text name=STAT_PLAYERS value="%s"></label>'
+               '<small>Cricinfo id:Name, add :bowl for bowlers, comma separated.</small>'
+               '<label>Stats from <select name=STAT_CLASS>%s</select></label>'
+               % (v("CRICKET_TEAM"), v("STAT_PLAYERS", STAT_DEFAULT),
+                  _opt((("11", "All internationals"), ("1", "Tests"), ("2", "ODIs"), ("3", "T20Is")),
+                       STAT_CLASS)))
+    out.append('<h3>Weather</h3>'
+               '<label>Town <input type=text name=WEATHER_TOWN value="%s"></label>'
+               '<label>Latitude <input type=text name=WEATHER_LAT value="%s" style="width:120px">'
+               ' Longitude <input type=text name=WEATHER_LON value="%s" style="width:120px"></label>'
+               '<small>Change the town and leave the numbers alone to look them up. Needs a restart.</small>'
+               % (esc(TOWN), esc(LAT), esc(LON)))
+    out.append('<h3>Other</h3>'
+               '<label>Pet name <input type=text name=PET_NAME value="%s" maxlength=10> <small>(restart)</small></label>'
+               '<label>Internet screen pings <input type=text name=PING_HOST value="%s" style="width:140px"></label>'
+               % (esc(PET_NAME), esc(PING_HOST)))
+    out.append('<button name=go value=save>Save</button><button name=go value=restart>Save and restart</button>'
+               '</form><h3>Reset</h3><p><a href="/settings/reset">Forget everything set here and use '
+               'settings.toml again</a></p>')
+    return SET_PAGE % "".join(out)
+
+
+def _page(request, html):
+    return Response(request, html, content_type="text/html")
+
+
+def _back(request, msg=""):
+    return _page(request, '<!doctype html><meta http-equiv="refresh" content="0;url=/settings">%s' % esc(msg))
+
+
+@server.route("/settings")
+def settings_route(request: Request):
+    return _page(request, settings_html())
+
+
+@server.route("/settings/screen")
+def settings_screen(request: Request):
+    global force_show
+    n = request.query_params.get("n", safe=False)
+    op = request.query_params.get("op", safe=False)
+    order = list(ORDER)
+    if n in ALL_SCREENS:
+        if op == "on" and n not in order:
+            order.append(n)
+        elif op == "off" and n in order and len(order) > 1:
+            order.remove(n)
+        elif op in ("up", "down") and n in order:
+            i = order.index(n)
+            j = i - 1 if op == "up" else i + 1
+            if 0 <= j < len(order):
+                order[i], order[j] = order[j], order[i]
+        elif op == "show" and n in order:
+            force_show = n
+            return _back(request)
+        CFG["SCREEN_ORDER"] = ",".join(order)
+        save_cfg()
+        set_order(order)
+    return _back(request)
+
+
+def geocode(town):
+    """Town name -> (lat, lon) via Open-Meteo's free geocoder."""
+    q = "".join(c if c.isalpha() or c.isdigit() else "%%%02X" % ord(c) for c in town)
+    with requests.get("https://geocoding-api.open-meteo.com/v1/search?count=1&language=en&name=" + q,
+                      timeout=NET_TIMEOUT) as r:
+        res = (r.json().get("results") or [None])[0]
+    free_sockets()
+    if not res:
+        raise ValueError("no place called '%s'" % town)
+    return "%.4f" % res["latitude"], "%.4f" % res["longitude"]
+
+
+@server.route("/settings/save")
+def settings_save(request: Request):
+    global reboot_at
+    q = request.query_params
+
+    def g(k):
+        val = q.get(k, safe=False)
+        return None if val is None else unquote(val).strip()
+
+    notes, restart = [], []
+    CFG["AUTO_ROTATE"] = "on" if g("AUTO_ROTATE") else "off"
+    CFG["SCREEN_SECONDS"] = str(_num(g("SCREEN_SECONDS"), 3, 3600, SCREEN_SECONDS))
+    CFG["NIGHT_HOURS"] = ("%d-%d" % (_num(g("NIGHT_FROM"), 0, 23, 23), _num(g("NIGHT_TO"), 0, 23, 7))
+                          if g("NIGHT_ON") else "")
+    if g("NIGHT_SCREEN") in ("clock", "matrix", "fire", "stars", "cycle"):
+        CFG["NIGHT_SCREEN"] = g("NIGHT_SCREEN")
+    CFG["NIGHT_BRIGHTNESS"] = "%.2f" % _num(g("NIGHT_BRIGHTNESS"), 0.01, 1, NIGHT_BRIGHT, True)
+    CFG["DAY_BRIGHTNESS"] = "%.2f" % _num(g("DAY_BRIGHTNESS"), 0.02, 1, DAY_BRIGHT, True)
+    CFG["NEWS_SECONDS"] = str(_num(g("NEWS_SECONDS"), 2, 120, NEWS_SECONDS))
+    CFG["NEWS_PER_VISIT"] = str(_num(g("NEWS_PER_VISIT"), 1, 50, NEWS_PER_VISIT))
+    CFG["NEWS_COUNT"] = str(_num(g("NEWS_COUNT"), 1, 15, NEWS_COUNT))
+    CFG["TRIVIA_SECONDS"] = str(_num(g("TRIVIA_SECONDS"), 5, 300, TRIVIA_SECONDS))
+    if g("TRIVIA_SOURCE") in ("india", "world", "mix"):
+        CFG["TRIVIA_SOURCE"] = g("TRIVIA_SOURCE")
+    if g("STAT_CLASS") in ("1", "2", "3", "11"):
+        CFG["STAT_CLASS"] = g("STAT_CLASS")
+    for k in ("CRICKET_TEAM", "STAT_PLAYERS", "PING_HOST"):
+        if g(k) is not None:
+            CFG[k] = g(k)
+    if g("PET_NAME"):
+        CFG["PET_NAME"] = g("PET_NAME")[:10]
+    town, lat, lon = g("WEATHER_TOWN") or TOWN, g("WEATHER_LAT") or "", g("WEATHER_LON") or ""
+    if town != TOWN and (lat, lon) in ((LAT, LON), ("", "")):
+        try:
+            lat, lon = geocode(town)
+            notes.append("Found %s at %s, %s." % (esc(town), lat, lon))
+        except Exception as e:  # noqa: BLE001
+            notes.append("Couldn't look up %s (%s) - enter its latitude and longitude." % (esc(town), esc(repr(e))))
+            lat, lon = LAT, LON
+    CFG["WEATHER_TOWN"], CFG["WEATHER_LAT"], CFG["WEATHER_LON"] = town, lat or LAT, lon or LON
+    # what only takes effect after a restart
+    now_vals = {"WEATHER_TOWN": TOWN, "WEATHER_LAT": LAT, "WEATHER_LON": LON, "TRIVIA_SOURCE": TRIVIA_SOURCE,
+                "PET_NAME": PET_NAME, "NEWS_COUNT": str(NEWS_COUNT)}
+    restart = [k for k in RESTART_KEYS if str(CFG.get(k, now_vals[k])) != str(now_vals[k])]
+    theme = g("THEME")
+    if theme in THEMES and theme != THEME:
+        try:
+            microcontroller.nvm[0] = THEMES.index(theme) + 1
+            restart.append("THEME")
+        except Exception as e:  # noqa: BLE001
+            notes.append("Couldn't save the theme: %s" % esc(repr(e)))
+    try:
+        save_cfg()
+    except Exception as e:  # noqa: BLE001
+        return _page(request, settings_html("Couldn't save: %s" % esc(repr(e))))
+    apply_cfg()
+    if g("go") == "restart":
+        reboot_at = time.monotonic() + 2
+        notes.append("Saved. The board restarts in a few seconds - reload this page in about 20 seconds.")
+    elif restart:
+        notes.append("Saved. These take effect after a restart: %s. "
+                     '<a href="/settings/restart">Restart now</a>' % ", ".join(
+                         k.replace("_", " ").lower() for k in restart))
+    else:
+        notes.append("Saved - already applied.")
+    return _page(request, settings_html(" ".join(notes)))
+
+
+@server.route("/settings/restart")
+def settings_restart(request: Request):
+    global reboot_at
+    reboot_at = time.monotonic() + 2
+    return _page(request, SET_PAGE % "<p>Restarting... reload in about 20 seconds.</p>"
+                 '<p><a href="/settings">Back to settings</a></p>')
+
+
+@server.route("/settings/reset")
+def settings_reset(request: Request):
+    global reboot_at, CFG
+    if request.query_params.get("sure", safe=False) != "1":
+        return _page(request, SET_PAGE % ('<p>This forgets every setting changed on this page (and the theme '
+                                          'choice) and goes back to settings.toml. The board restarts.</p>'
+                                          '<p><a href="/settings/reset?sure=1">Yes, reset</a> &nbsp; '
+                                          '<a href="/settings">Cancel</a></p>'))
+    CFG = {}
+    try:
+        save_cfg()
+        microcontroller.nvm[0] = 0
+    except Exception as e:  # noqa: BLE001
+        return _page(request, settings_html("Couldn't reset: %s" % esc(repr(e))))
+    reboot_at = time.monotonic() + 2
+    return _page(request, SET_PAGE % "<p>Reset. Restarting... reload in about 20 seconds.</p>")
+
 
 
 @server.route("/kite")
@@ -4056,6 +4409,15 @@ while True:
         btn_was = not pressed
         if switch:
             wake_until = now_m + 60
+        if force_show:                       # "show" on the Settings page, or a screen turned off
+            name, force_show = force_show, None
+            if name in ORDER:
+                screen = ORDER.index(name)
+            display.root_group = ALL_SCREENS[name]
+            showing = name
+            last_switch = now_m
+            wake_until = now_m + 60
+            was_showing = None
         boot_down = boot is not None and not boot.value
         boot_press = boot_down and boot_was
         boot_was = not boot_down

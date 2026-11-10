@@ -1,4 +1,6 @@
 # Copy this file to the board as settings.toml and fill in your own values.
+# Most of the optional settings below can also be changed from http://<board-ip>:8080/settings;
+# changes made there are saved on the board and take priority over this file.
 # NEVER commit your real settings.toml: it holds your Wi-Fi password and API secrets.
 # All values are strings in quotes.
 

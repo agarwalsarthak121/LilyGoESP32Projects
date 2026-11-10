@@ -49,6 +49,27 @@ def client():
             print(f"GET {path} -> {r.status}, {len(r.read())} bytes")
         except Exception as e:
             print(f"GET {path} -> FAILED: {e!r}")
+    # SETTINGS TEST: the page, a form save with real URL encoding, screen on/off/reorder
+    r = urllib.request.urlopen("http://127.0.0.1:8080/settings", timeout=4).read().decode()
+    print("settings page:", len(r), "bytes,", r.count("class=row"), "screen rows")
+    from urllib.parse import urlencode as _enc
+    form = {"AUTO_ROTATE": "on", "SCREEN_SECONDS": "20", "NIGHT_ON": "1", "NIGHT_FROM": "22", "NIGHT_TO": "6",
+            "NIGHT_SCREEN": "fire", "NIGHT_BRIGHTNESS": "0.08", "DAY_BRIGHTNESS": "0.7", "NEWS_SECONDS": "8",
+            "NEWS_PER_VISIT": "4", "NEWS_COUNT": "10", "TRIVIA_SECONDS": "25", "TRIVIA_SOURCE": "india",
+            "CRICKET_TEAM": "India", "STAT_PLAYERS": "253802:Virat Kohli,625383:Jasprit Bumrah:bowl",
+            "STAT_CLASS": "2", "WEATHER_TOWN": "Delhi", "WEATHER_LAT": "28.61", "WEATHER_LON": "77.21",
+            "PET_NAME": "Moong", "PING_HOST": "8.8.8.8", "THEME": "aura", "go": "save"}
+    r = urllib.request.urlopen("http://127.0.0.1:8080/settings/save?" + _enc(form), timeout=4).read().decode()
+    print("save note:", r.split("<div class=note>")[1].split("</div>")[0][:80] if "class=note" in r else "?")
+    print("applied:", NS["SCREEN_SECONDS"], NS["NIGHT"], NS["NIGHT_SCREEN"], NS["NEWS_SECONDS"], NS["TRIVIA_SECONDS"],
+          NS["STAT_CLASS"], NS["PING_HOST"], [p[1] for p in NS["STAT_PLAYERS"]], NS["DAY_BRIGHT"])
+    for q in ("n=pet&op=off", "n=trivia&op=up", "n=matrix&op=on", "n=news&op=show"):
+        urllib.request.urlopen("http://127.0.0.1:8080/settings/screen?" + q, timeout=4).read()
+    print("order now:", NS["ORDER"])
+    print("stored:", sorted(NS["CFG"].items())[:4], "...")
+    r = urllib.request.urlopen("http://127.0.0.1:8080/settings/save?" + _enc(
+        dict(form, WEATHER_TOWN="Bijnor")), timeout=4).read().decode()
+    print("town change:", r.split("<div class=note>")[1].split("</div>")[0][:120])
     # THEME TEST: choosing a look saves it to NVM and asks for a restart
     r = urllib.request.urlopen("http://127.0.0.1:8080/theme?name=classic", timeout=4).read().decode()
     print("theme page:", r.split("<p>")[1][:60] if "<p>" in r else r[:80], "| nvm[0] =", NS["microcontroller"].nvm[0] if "microcontroller" in NS else "?")

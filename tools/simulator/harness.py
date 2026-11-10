@@ -89,6 +89,8 @@ class Session:
         print("REQ step %d %s" % (STEP["n"], url.split("/")[2]))
         if "generate_204" in url:
             r = Resp({}); r.status_code = 204; return r
+        if "geocoding-api.open-meteo.com" in url:
+            return Resp({"results": [{"name": "Bijnor", "latitude": 29.3724, "longitude": 78.1358}]})
         if "api_token.php" in url:
             return Resp({"response_code": 0, "token": "tkn"})
         if "opentdb.com/api.php" in url:
@@ -230,7 +232,7 @@ class Response:
 hs.Server, hs.Request, hs.Response = Server, Request, Response
 sys.modules["adafruit_httpserver"] = hs
 mc = types.ModuleType("microcontroller"); mc.pin = types.SimpleNamespace(GPIO14="GPIO14", GPIO0="GPIO0")
-mc.nvm = bytearray(b"\xff" * 128)
+mc.nvm = bytearray(b"\xff" * 4096)
 NVMFILE = os.environ.get("NVMFILE")
 if NVMFILE and os.path.exists(NVMFILE):
     mc.nvm = bytearray(open(NVMFILE, "rb").read())

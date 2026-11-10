@@ -92,7 +92,8 @@ Open `http://<board-ip>:8080` on a phone or laptop on the same Wi-Fi:
 
 | Page | Use |
 |---|---|
-| `/` | Kite login link, paste-the-redirect-URL form, auto-rotate toggle |
+| `/` | Kite login link, paste-the-redirect-URL form, links to everything below |
+| `/settings` | **Settings**: turn screens on/off, reorder them, jump to one; auto-rotate and seconds per screen; night mode on/off, hours, night screen and brightness; theme and day brightness; news, trivia, cricket, weather town, pet name, ping host |
 | `/kite` | Where the Kite login lands (via the https redirect page) |
 | `/cricket` | Pick which live match to follow, or turn cricket off |
 | `/cricket/debug` | Raw details of the cricket feed, for troubleshooting |
@@ -111,7 +112,9 @@ Kite access tokens expire every morning (around 07:30 IST). Kite only accepts an
 
 ## Settings
 
-Everything is configured in `settings.toml`; see [`settings.toml.example`](settings.toml.example) for every key and its default. The most useful ones:
+Most settings can be changed from your phone at `http://<board-ip>:8080/settings`. Changes are saved on the board (in NVM), survive restarts, and win over `settings.toml`; most apply instantly, and the page says when one needs a restart (theme, weather town, trivia source, pet name, number of headlines). Changing the town looks up its latitude and longitude for you. "Reset" forgets everything set on the page and goes back to `settings.toml`. API keys and the Wi-Fi password stay in `settings.toml` only.
+
+`settings.toml` holds the defaults; see [`settings.toml.example`](settings.toml.example) for every key. The most useful ones:
 
 | Key | Default | Meaning |
 |---|---|---|
