@@ -33,6 +33,13 @@ class Radio:
     @property
     def ipv4_address(self):
         return self.ip if self.connected else None
+    ipv4_gateway = "192.168.1.1"
+    ap_info = types.SimpleNamespace(rssi=-58)
+    def ping(self, ip, timeout=None):
+        if not self.connected: return None
+        if _window("NET_DOWN") and str(ip) != "192.168.1.1": return None
+        import random as _r
+        return (3 if str(ip) == "192.168.1.1" else 18 + _r.random() * 40 + (90 if _r.random() < 0.08 else 0)) / 1000
     def connect(self, ssid, pw, timeout=None):
         self.attempts += 1
         print("WIFI connect attempt %d (step %d)" % (self.attempts, STEP["n"]))
@@ -81,6 +88,42 @@ class Session:
         print("REQ step %d %s" % (STEP["n"], url.split("/")[2]))
         if "generate_204" in url:
             r = Resp({}); r.status_code = 204; return r
+        if "api_token.php" in url:
+            return Resp({"response_code": 0, "token": "tkn"})
+        if "opentdb.com/api.php" in url:
+            from urllib.parse import quote
+            Q = [("What is the capital of Japan?", "Tokyo", ["Kyoto", "Osaka", "Nagoya"], "Geography"),
+                 ("Which element has the chemical symbol 'Fe'?", "Iron", ["Lead", "Fluorine", "Francium"], "Science & Nature"),
+                 ("In computing, what does the acronym 'RAM' stand for in a typical desktop or laptop specification sheet?", "Random Access Memory", ["Read Access Memory", "Rapid Allocation Module", "Runtime Application Manager"], "Science: Computers")]
+            return Resp({"response_code": 0, "results": [
+                {"category": quote(c), "difficulty": "easy", "question": quote(q),
+                 "correct_answer": quote(a), "incorrect_answers": [quote(x) for x in w]} for q, a, w, c in Q]})
+        if "stats.espncricinfo.com" in url:
+            if os.environ.get("STAT_FAIL"):
+                r = Resp({}, b"<html>blocked</html>"); r.status_code = 403; return r
+            bowl = "type=bowling" in url
+            head = ("<th></th><th>Span</th><th>Mat</th><th>Inns</th><th>Overs</th><th>Mdns</th><th>Runs</th>"
+                    "<th>Wkts</th><th>BBI</th><th>Ave</th><th>Econ</th><th>SR</th><th>4</th><th>5</th>") if bowl else (
+                    "<th></th><th>Span</th><th>Mat</th><th>Inns</th><th>NO</th><th>Runs</th><th>HS</th><th>Ave</th>"
+                    "<th>BF</th><th>SR</th><th>100</th><th>50</th><th>0</th><th>4s</th><th>6s</th>")
+            yr = time.localtime().tm_year
+            def row(label, vals):
+                return '<tr class="data1"><td class="left" nowrap="nowrap"><b>%s</b></td>%s</tr>' % (
+                    label, "".join('<td>%s</td>' % v for v in vals))
+            if bowl:
+                car = ["2016-%d" % yr, "200", "390", "1580.2", "160", "4400", "445", "6/19", "19.80", "2.78", "21.3", "15", "17"]
+                cur = ["%d-%d" % (yr, yr), "22", "36", "301.4", "28", "1012", "61", "5/27", "16.59", "3.35", "29.6", "3", "2"]
+            else:
+                car = ["2008-%d" % yr, "560", "620", "90", "27599", "254*", "52.07", "29000", "92.1", "82", "143", "38", "2700", "300"]
+                cur = ["%d-%d" % (yr, yr), "24", "28", "4", "1187", "135", "49.45", "1290", "92.01", "4", "6", "1", "120", "18"]
+            html = ("<html><body>" + "<p>junk</p>" * 300 +
+                    '<table class="engineTable"><thead><tr class="headlinks">' + head + "</tr></thead><tbody>" +
+                    row("unfiltered", car) + "</tbody></table>" +
+                    '<table class="engineTable"><thead><tr class="headlinks">' + head + "</tr></thead><tbody>" +
+                    row("year %d" % (yr - 1), car) + row("year %d" % yr, cur) + "</tbody></table></body></html>")
+            return Resp({}, html.encode())
+        if "speed.cloudflare.com" in url:
+            return Resp({}, b"x" * 400000)
         if "kite.trade" in url:
             print("GET", url, headers["Authorization"])
             if KITE_EXPIRED:
@@ -186,7 +229,7 @@ class Response:
 hs.Server, hs.Request, hs.Response = Server, Request, Response
 sys.modules["adafruit_httpserver"] = hs
 mc = types.ModuleType("microcontroller"); mc.pin = types.SimpleNamespace(GPIO14="GPIO14", GPIO0="GPIO0")
-mc.nvm = bytearray(b"\xff" * 64)
+mc.nvm = bytearray(b"\xff" * 128)
 NVMFILE = os.environ.get("NVMFILE")
 if NVMFILE and os.path.exists(NVMFILE):
     mc.nvm = bytearray(open(NVMFILE, "rb").read())

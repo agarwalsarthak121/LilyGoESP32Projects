@@ -38,12 +38,22 @@ FMP_API_KEY = ""
 #                             # the board's web page /theme can switch it too
 
 # --- Screens and rotation ---
-# SCREEN_ORDER = "weather,portfolio,markets,cricket,news"   # add "clock" for the big clock by day
+# SCREEN_ORDER = "weather,portfolio,heatmap,markets,cricket,stat,news,trivia,net,pet"
+#                             # also available: clock, matrix, fire, stars
 # SCREEN_SECONDS = "15"
 # AUTO_ROTATE = "off"         # screens then change only with the KEY button
 
 # --- Reliability ---
 # WATCHDOG = "off"            # disable the 2-minute hang watchdog (e.g. while using the REPL)
+
+# --- Extra screens ---
+# NIGHT_SCREEN = "clock"      # or "matrix", "fire", "stars", "cycle" (a different one each hour)
+# STAT_PLAYERS = "253802:Virat Kohli,34102:Rohit Sharma,625383:Jasprit Bumrah:bowl,1070173:Shubman Gill"
+# STAT_CLASS = "11"           # 11 all internationals, 1 Tests, 2 ODIs, 3 T20Is
+# TRIVIA_SECONDS = "30"
+# TRIVIA_CATEGORY = ""        # Open Trivia DB id: 9 general, 17 science, 21 sports, 22 geography, 23 history
+# PET_NAME = "Moong"
+# PING_HOST = "1.1.1.1"
 
 # --- Night mode ---
 # NIGHT_HOURS = "23-7"        # "" turns night mode off

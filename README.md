@@ -6,7 +6,7 @@ Hobby builds on the **LilyGO T-Display-S3** (ESP32-S3, 16 MB flash, 8 MB PSRAM, 
 
 | Project | Status | What it is |
 |---|---|---|
-| [**T-Display desk dashboard**](t-display-dashboard/) | Working | Rotating Wi-Fi dashboard in CircuitPython: weather with an analog clock, Zerodha P&L, SENSEX/NIFTY/NASDAQ/S&P 500, live cricket, top India news, and a night clock. Two looks: **aura** (a style per screen) and **classic** |
+| [**T-Display desk dashboard**](t-display-dashboard/) | Working | Rotating Wi-Fi dashboard in CircuitPython: weather with an analog clock, Zerodha P&L, SENSEX/NIFTY/NASDAQ/S&P 500, live cricket, top India news, a holdings heatmap, cricket stat of the day, trivia, internet health, a portfolio pet and night screensavers. Two looks: **aura** (a style per screen) and **classic** |
 | "Hey Jarvis" voice assistant | Planned | Wake word on the ESP32-S3 (INMP441 mic, MAX98357A amp), with speech-to-text → Claude → text-to-speech through a small relay server |
 | Analog P&L gauge | Planned | A servo needle on a printed dial showing today's portfolio P&L |
 | Cricket alerts | Planned | Sounds for wickets, fours and sixes through the I2S amp |

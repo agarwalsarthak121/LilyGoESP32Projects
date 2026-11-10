@@ -22,6 +22,11 @@
 #   NEWS_SECONDS="6"      (how long each headline stays up)
 #   NEWS_PER_VISIT="10"   (headlines shown before auto-rotate moves on; "2" = short visits)
 #   THEME="aura"          (a different style per screen; "classic" = the original grey look)
+#   NIGHT_SCREEN="clock"  (or "matrix", "fire", "stars", "cycle" = a different one each hour)
+#   STAT_PLAYERS="253802:Virat Kohli,625383:Jasprit Bumrah:bowl"  (Cricinfo id:name[:bowl])
+#   STAT_CLASS="11"       (11 all internationals, 1 Tests, 2 ODIs, 3 T20Is)
+#   TRIVIA_SECONDS="30"   TRIVIA_CATEGORY="9" (Open Trivia DB category id, optional)
+#   PET_NAME="Moong"      PING_HOST="1.1.1.1"
 #   WATCHDOG="off"        (turn off the hang watchdog, e.g. while debugging over the REPL)
 #   NIGHT_HOURS="23-7"    (dark, dim clock only at night; "" turns night mode off)
 #   DAY_BRIGHTNESS="0.6"  NIGHT_BRIGHTNESS="0.05"
@@ -32,6 +37,8 @@
 import os
 import time
 import struct
+import random
+import ipaddress
 import board
 import displayio
 import vectorio
@@ -180,6 +187,48 @@ def text(font, s, x, y, color, center=False, right=False):
                 anchor_point=(ax, 0.5 if center else 0.0), anchored_position=(x, y))
     root.append(lbl)
     return lbl
+
+
+def px_width(font, t):
+    w = 0
+    for ch in t:
+        g = font.get_glyph(ord(ch))
+        if g:
+            w += g.shift_x
+    return w
+
+
+def wrap_px(font, t, width, lines):
+    """Word-wrap `t` to `width` pixels. Returns (lines, fits)."""
+    out, cur = [], ""
+    space = px_width(font, " ")
+    cur_w = 0
+    for word in t.split():
+        ww = px_width(font, word)
+        if cur and cur_w + space + ww <= width:
+            cur += " " + word
+            cur_w += space + ww
+            continue
+        if cur:
+            out.append(cur)
+        cur, cur_w = word, ww
+        while cur_w > width and len(cur) > 1:      # one very long "word"
+            k = len(cur) - 1
+            while k > 1 and px_width(font, cur[:k]) > width:
+                k -= 1
+            out.append(cur[:k])
+            cur = cur[k:]
+            cur_w = px_width(font, cur)
+    if cur:
+        out.append(cur)
+    if len(out) <= lines:
+        return out, True
+    out = out[:lines]
+    last = out[-1]
+    while last and px_width(font, last + "...") > width:
+        last = last[:last.rfind(" ")] if " " in last else last[:-1]
+    out[-1] = last.rstrip(",;:-") + "..."
+    return out, False
 
 
 def render_strip(font, s, height, base):
@@ -1152,14 +1201,1297 @@ def clock_minute(t):
 
 clock_theme(False)
 
+# ============================================================= EXTRA SCREENS
+# Stat of the day, holdings heatmap, internet health, trivia, a virtual pet and three
+# night screensavers (matrix, fire, stars). Each one is a Screen: the main loop calls
+# tick() every pass (background refresh), enter() when it appears, frame() while it is
+# showing, boot() for the BOOT button and second() once a second.
+
+class Screen:
+    dwell = None                    # seconds on screen when auto-rotating (None = SCREEN_SECONDS)
+
+    def __init__(self):
+        self.grp = displayio.Group()
+
+    def tick(self, now):
+        pass
+
+    def enter(self, now):
+        pass
+
+    def frame(self, now):
+        pass
+
+    def boot(self, now):
+        pass
+
+    def second(self, hhmm):
+        if self.clock is not None:
+            self.clock.text = hhmm
+
+    def skip(self):
+        return False
+
+    def refresh(self):
+        pass
+
+    clock = None
+
+
+def _head(title, accent, sub=""):
+    """Common header: an accent bar, the title, an optional subtitle and the clock."""
+    p = displayio.Palette(1)
+    p[0] = accent
+    root.append(vectorio.Rectangle(pixel_shader=p, width=3, height=18, x=0, y=3))
+    text(F_TITLE, title, 8, 3, WHITE)
+    s = text(F_SMALL, sub, 8 + px_width(F_TITLE, title) + 8, 8, 0x8A9099)
+    c = text(F_TITLE, "--:--", 314, 3, 0x9AA3AD, right=True)
+    return s, c
+
+
+def _tile(x, y, w, h, label, fill=0x1A1E23, both=False):
+    root.append(RoundRect(x, y, w, h, 5, fill=fill))
+    lab = text(F_SMALL, label, x + 6, y + 4, 0x8A9099)
+    val = text(F_MED, "--", x + 6, y + 17, WHITE)
+    return (lab, val) if both else val
+
+
+def _shuffle(items):
+    for i in range(len(items) - 1, 0, -1):
+        j = random.randint(0, i)
+        items[i], items[j] = items[j], items[i]
+    return items
+
+
+def _tagless(h):
+    """Text of an HTML fragment: tags removed, a few entities decoded, trimmed."""
+    while True:
+        a = h.find("<")
+        if a < 0:
+            break
+        b = h.find(">", a)
+        if b < 0:
+            h = h[:a]
+            break
+        h = h[:a] + h[b + 1:]
+    return h.replace("&nbsp;", " ").replace("&amp;", "&").replace("&#39;", "'").strip()
+
+
+def _cells(row, tag="<td"):
+    return [_tagless(c[c.find(">") + 1:]) for c in row.split(tag)[1:]]
+
+
+def _ago(secs):
+    secs = int(max(0, secs))
+    if secs < 90:
+        return "%ds" % secs
+    if secs < 3600:
+        return "%dm" % (secs // 60)
+    if secs < 172800:
+        return "%dh %dm" % (secs // 3600, secs // 60 % 60)
+    return "%dd %dh" % (secs // 86400, secs // 3600 % 24)
+
+
+EXTRA = {}
+port_day_pct = None             # today's portfolio move, set by get_portfolio (None = no data)
+
+
+# ------------------------------------------------------------- stat of the day
+# A player's international numbers for this year, from ESPNcricinfo Statsguru.
+# STAT_PLAYERS = "253802:Virat Kohli,625383:Jasprit Bumrah:bowl"  (Cricinfo player id:name[:bowl])
+# The BOOT button moves to the next player. Without data it shows a cricket fact instead.
+STAT_PLAYERS = []
+for _p in (os.getenv("STAT_PLAYERS") or
+           "253802:Virat Kohli,34102:Rohit Sharma,625383:Jasprit Bumrah:bowl,"
+           "1070173:Shubman Gill").split(","):
+    _f = [x.strip() for x in _p.split(":")]
+    if len(_f) >= 2 and _f[0].isdigit():
+        STAT_PLAYERS.append((_f[0], _f[1], len(_f) > 2 and _f[2].lower().startswith("bowl")))
+STAT_CLASS = os.getenv("STAT_CLASS") or "11"          # 11 all internationals, 1 Tests, 2 ODIs, 3 T20Is
+STAT_URL = ("https://stats.espncricinfo.com/ci/engine/player/%s.html"
+            "?class=%s;template=results;type=%s;view=year")
+STAT_FORMAT = {"1": "Tests", "2": "ODIs", "3": "T20Is", "11": "internationals"}.get(STAT_CLASS, "matches")
+CRICKET_FACTS = (
+    ("100", "international hundreds", "Sachin Tendulkar is the only player with 100 international centuries."),
+    ("264", "highest ODI score", "Rohit Sharma against Sri Lanka at Eden Gardens, Kolkata, 2014."),
+    ("99.94", "Test batting average", "Don Bradman's career average - nobody else is close."),
+    ("800", "Test wickets", "Muttiah Muralidaran, the most in Test history."),
+    ("15,921", "Test runs", "Sachin Tendulkar, the most in Test history."),
+    ("18,426", "ODI runs", "Sachin Tendulkar, the most in ODI history."),
+    ("619", "Test wickets", "Anil Kumble, India's leading Test wicket-taker."),
+    ("10", "wickets in an innings", "Anil Kumble took all ten against Pakistan in Delhi, 1999."),
+    ("6", "sixes in an over", "Yuvraj Singh off Stuart Broad, T20 World Cup, Durban, 2007."),
+    ("3", "ODI double hundreds", "Rohit Sharma is the only player with three."),
+    ("50", "ODI hundreds", "Virat Kohli passed Sachin's 49 in the 2023 World Cup semi-final."),
+    ("400", "highest Test score", "Brian Lara, 400 not out against England, Antigua, 2004."),
+    ("175", "runs from 17 for 5", "Kapil Dev against Zimbabwe, 1983 World Cup, Tunbridge Wells."),
+    ("1983", "first World Cup", "Kapil Dev's India beat West Indies in the final at Lord's."),
+    ("2007", "first T20 World Cup", "India beat Pakistan in the final in Johannesburg."),
+    ("2011", "World Cup at home", "MS Dhoni finished the final with a six at the Wankhede."),
+    ("2024", "T20 World Cup", "India beat South Africa in the final in Barbados."),
+    ("36", "all out", "India's lowest Test total, against Australia in Adelaide, 2020."),
+)
+
+
+class StatScreen(Screen):
+    def __init__(self):
+        global root
+        Screen.__init__(self)
+        root = self.grp
+        self.sub, self.clock = _head("STAT OF THE DAY", 0x1F5FBF)
+        self.name = text(F_TITLE, "", 8, 30, WHITE)
+        self.big = text(F_MONEY, "", 8, 52, 0xFFD27A)
+        self.unit = text(F_MED, "", 120, 63, 0xE6EAEE)
+        self.tile_grp = displayio.Group()
+        root.append(self.tile_grp)
+        root = self.tile_grp
+        self.tiles = []
+        self.tile_lbls = []
+        for i in range(5):
+            x = 4 + i * 63
+            root.append(RoundRect(x, 92, 60, 38, 5, fill=0x1A1E23))
+            self.tile_lbls.append(text(F_SMALL, "", x + 30, 99, 0x8A9099, center=True))
+            self.tiles.append(text(F_MED, "", x + 30, 118, WHITE, center=True))
+        root = self.grp
+        self.fact_lbls = [text(F_MED, "", 8, 96, 0xE6EAEE), text(F_MED, "", 8, 116, 0xE6EAEE)]
+        self.note = text(F_SMALL, "", 8, 140, 0xB8C0C8)
+        self.foot = text(F_SMALL, "", 8, 157, 0x6A727B)
+        self.cache = {}             # player id -> (time fetched, data dict or None, error)
+        self.offset = 0
+        self.last_try = -1e6
+        self.debug = "not fetched yet"
+
+    def player(self):
+        if not STAT_PLAYERS:
+            return None
+        day = time.localtime().tm_yday
+        return STAT_PLAYERS[(day + self.offset) % len(STAT_PLAYERS)]
+
+    def refresh(self):
+        self.cache = {}
+        self.last_try = -1e6
+
+    def tick(self, now):
+        p = self.player()
+        if not p:
+            return
+        got = self.cache.get(p[0])
+        stale = got is None or now - got[0] > (6 * 3600 if got[1] else 1800)
+        if stale and now - self.last_try > 60:
+            self.last_try = now
+            safe(lambda: self.fetch(p, now), "stat")
+            self.show()
+
+    def fetch(self, p, now):
+        pid, name, bowl = p
+        url = STAT_URL % (pid, STAT_CLASS, "bowling" if bowl else "batting")
+        status = None
+        body = bytearray()
+        try:
+            with requests.get(url, headers=YAHOO_HDR, timeout=NET_TIMEOUT) as r:
+                status = r.status_code
+                for chunk in r.iter_content(chunk_size=2048):
+                    body.extend(chunk)
+                    dog()
+                    if len(body) > 700000:
+                        break
+        except Exception as e:  # noqa: BLE001
+            self.cache[pid] = (now, None, "network: %r" % e)
+            self.debug = "%s: %r" % (url, e)
+            raise
+        html = _text(bytes(body))
+        data = self.parse(html, bowl)
+        self.debug = "%s\nHTTP %s, %d bytes\nparsed: %r" % (url, status, len(body), data)
+        self.cache[pid] = (now, data, None if data else "HTTP %s, no table found" % status)
+
+    def parse(self, html, bowl):
+        yr = time.localtime().tm_year
+        out = {"year": yr}
+        for key, label in (("now", "year %d" % yr), ("career", "unfiltered")):
+            i = html.find(label)
+            if i < 0:
+                continue
+            rs = html.rfind("<tr", 0, i)
+            re_ = html.find("</tr>", i)
+            vals = _cells(html[rs:re_])
+            th = html.rfind("<thead", 0, rs)
+            names = _cells(html[th:html.find("</thead>", th)], "<th") if th >= 0 else []
+            if len(names) != len(vals):          # unexpected layout: assume the usual columns
+                names = (["", "Span", "Mat", "Inns", "Overs", "Mdns", "Runs", "Wkts", "BBI", "Ave",
+                          "Econ", "SR", "4", "5"] if bowl else
+                         ["", "Span", "Mat", "Inns", "NO", "Runs", "HS", "Ave", "BF", "SR",
+                          "100", "50", "0", "4s", "6s"])
+            out[key] = dict(zip(names, vals))
+        return out if ("now" in out or "career" in out) else None
+
+    def enter(self, now):
+        self.show()
+
+    def boot(self, now):
+        self.offset += 1
+        self.last_try = -1e6            # fetch the next player's numbers straight away
+        self.show()
+
+    def show(self):
+        p = self.player()
+        got = self.cache.get(p[0]) if p else None
+        data = got[1] if got else None
+        if not data:
+            self.fact()
+            if p and got and got[2]:
+                self.foot.text = ("%s: no stats (%s)" % (p[1], got[2]))[:52]
+            return
+        pid, name, bowl = p
+        now_d = data.get("now") or {}
+        car = data.get("career") or {}
+        self.sub.text = STAT_FORMAT.upper()
+        self.name.text = name
+        self.tile_grp.hidden = False
+        self.fact_lbls[0].text = self.fact_lbls[1].text = ""
+        main = "Wkts" if bowl else "Runs"
+        if now_d:
+            self.big.text = commas(now_d.get(main, "0"))
+            self.unit.text = "%s in %d" % ("wickets" if bowl else "runs", data["year"])
+        else:
+            self.big.text = "0"
+            self.unit.text = "%s yet in %d" % (STAT_FORMAT, data["year"])
+        self.unit.anchored_position = (8 + px_width(F_MONEY, self.big.text) + 8, 63)
+        cols = (("MAT", "Mat"), ("AVE", "Ave"), ("ECON", "Econ"), ("BEST", "BBI"), ("5W", "5")) if bowl \
+            else (("MAT", "Mat"), ("INNS", "Inns"), ("AVE", "Ave"), ("SR", "SR"), ("100/50", None))
+        for i, (lab, key) in enumerate(cols):
+            self.tile_lbls[i].text = lab
+            if key is None:
+                v = "%s/%s" % (now_d.get("100", "-"), now_d.get("50", "-")) if now_d else "-"
+            else:
+                v = now_d.get(key, "-") if now_d else "-"
+            self.tiles[i].text = v[:7]
+        if car:
+            line = ("Career: %s wickets at %s, best %s" % (car.get("Wkts", "?"), car.get("Ave", "?"),
+                                                          car.get("BBI", "?")) if bowl else
+                    "Career: %s runs at %s, %s hundreds" % (commas(car.get("Runs", "?")),
+                                                           car.get("Ave", "?"), car.get("100", "?")))
+        else:
+            line = ""
+        self.note.text = line[:52]
+        t = time.localtime()
+        self.foot.text = "Statsguru  -  player %d/%d  -  BOOT for next" % (
+            (t.tm_yday + self.offset) % len(STAT_PLAYERS) + 1, len(STAT_PLAYERS))
+
+    def fact(self):
+        t = time.localtime()
+        big, unit, detail = CRICKET_FACTS[(t.tm_yday + self.offset) % len(CRICKET_FACTS)]
+        self.sub.text = "CRICKET FACT"
+        self.name.text = ""
+        self.big.text = big
+        self.unit.text = unit
+        self.unit.anchored_position = (8 + px_width(F_MONEY, big) + 8, 63)
+        self.tile_grp.hidden = True          # the detail sits where the tiles would be
+        rows, _ = wrap_px(F_MED, detail, 304, 2)
+        self.note.text = ""
+        self.fact_lbls[0].text = rows[0] if rows else ""
+        self.fact_lbls[1].text = rows[1] if len(rows) > 1 else ""
+        self.foot.text = "BOOT for another"
+
+
+def commas(s):
+    """'12345' -> '12,345' (leaves anything else alone)."""
+    s = str(s).strip()
+    if not s.isdigit() or len(s) < 4:
+        return s
+    out = ""
+    while len(s) > 3:
+        out = "," + s[-3:] + out
+        s = s[:-3]
+    return s + out
+
+
+stat_screen = StatScreen()
+EXTRA["stat"] = stat_screen
+
+
+# ------------------------------------------------------------- holdings heatmap
+# One tile per stock, sized by its value and coloured by today's move (squarified treemap).
+def squarify(vals, x, y, w, h):
+    """Rectangles (x, y, w, h) for values sorted largest first, as square as possible."""
+    total = float(sum(vals)) or 1.0
+    areas = [v * w * h / total for v in vals]
+    out = []
+
+    def worst(row, side):
+        s = sum(row)
+        return max(side * side * max(row) / (s * s), s * s / (side * side * min(row)))
+
+    i = 0
+    while i < len(areas):
+        side = min(w, h) or 1
+        row = [areas[i]]
+        i += 1
+        while i < len(areas) and worst(row + [areas[i]], side) <= worst(row, side):
+            row.append(areas[i])
+            i += 1
+        s = sum(row)
+        if w >= h:                          # a column on the left
+            cw = s / h if h else 0
+            yy = y
+            for a in row:
+                rh = a / cw if cw else 0
+                out.append((x, yy, cw, rh))
+                yy += rh
+            x += cw
+            w -= cw
+        else:                               # a row along the top
+            rh = s / w if w else 0
+            xx = x
+            for a in row:
+                rw = a / rh if rh else 0
+                out.append((xx, y, rw, rh))
+                xx += rw
+            y += rh
+            h -= rh
+    return out
+
+
+def move_colour(pct):
+    t = min(1.0, abs(pct) / 3.0) ** 0.7
+    return mix(0x2B3037, 0x1E9E50 if pct >= 0 else 0xD23A3A, 0.25 + 0.75 * t if pct else 0)
+
+
+class HeatScreen(Screen):
+    MAX = 16
+
+    def __init__(self):
+        global root
+        Screen.__init__(self)
+        root = self.grp
+        self.sub, self.clock = _head("HOLDINGS", 0x1E9E50, "TODAY")
+        self.tiles = []
+        for _ in range(self.MAX):
+            p = displayio.Palette(1)
+            p[0] = 0x2B3037
+            r = vectorio.Rectangle(pixel_shader=p, width=1, height=1, x=0, y=0)
+            r.hidden = True
+            root.append(r)
+            self.tiles.append((r, p, text(F_MED, "", 0, 0, WHITE), text(F_SMALL, "", 0, 0, WHITE),
+                               text(F_SMALL, "", 0, 0, 0xE6EAEE)))
+        self.msg = text(F_MED, "Log in to Kite to see your holdings", 160, 95, 0x8A9099, center=True)
+        self.rows = None
+
+    def update(self, rows):
+        """rows: [(symbol, value, day %)] or None when logged out."""
+        self.rows = rows
+        if self.grp is display.root_group:
+            self.draw()
+
+    def enter(self, now):
+        self.draw()
+
+    def skip(self):
+        return not self.rows
+
+    def draw(self):
+        rows = sorted(self.rows or [], key=lambda r: -r[1])
+        for r, p, big, small, pct in self.tiles:
+            r.hidden = True
+            big.text = small.text = pct.text = ""
+        if not rows:
+            self.msg.text = "Log in to Kite to see your holdings"
+            self.sub.text = "TODAY"
+            return
+        self.msg.text = ""
+        total = sum(v for _, v, _ in rows) or 1
+        day = sum(v * p / (100 + p) for _, v, p in rows)          # rupees moved today
+        self.sub.text = "%d STOCKS  %+.2f%% TODAY" % (len(rows), day / (total - day) * 100)
+        if len(rows) > self.MAX:                                  # fold the tail into one tile
+            rest = rows[self.MAX - 1:]
+            rv = sum(v for _, v, _ in rest)
+            rows = rows[:self.MAX - 1] + [("+%d MORE" % len(rest), rv,
+                                           sum(v * p for _, v, p in rest) / rv if rv else 0)]
+        rects = squarify([max(v, total * 0.002) for _, v, _ in rows], 2, 25, 316, 143)
+        for (sym, v, pct), (x, y, w, h), (r, p, big, small, plab) in zip(rows, rects, self.tiles):
+            x0, y0 = int(x + 0.5), int(y + 0.5)
+            x1, y1 = int(x + w + 0.5), int(y + h + 0.5)
+            r.x, r.y = x0 + 1, y0 + 1
+            r.width, r.height = max(1, x1 - x0 - 2), max(1, y1 - y0 - 2)
+            p[0] = move_colour(pct)
+            r.hidden = False
+            tw, th = x1 - x0, y1 - y0
+            cx, cy = (x0 + x1) // 2, (y0 + y1) // 2
+            if tw >= 62 and th >= 38 and px_width(F_MED, sym) <= tw - 6:
+                big.text = sym
+                big.anchor_point = (0.5, 0.5)
+                big.anchored_position = (cx, cy - 9)
+                plab.text = "%+.1f%%" % pct
+                plab.anchor_point = (0.5, 0.5)
+                plab.anchored_position = (cx, cy + 12)
+            elif tw >= 24 and th >= 14:
+                n = max(2, (tw - 4) // 6)
+                small.text = sym[:n]
+                small.anchor_point = (0.5, 0.5)
+                small.anchored_position = (cx, cy - (6 if th >= 28 else 0))
+                if th >= 28 and tw >= 36:
+                    plab.text = "%+.1f%%" % pct
+                    plab.anchor_point = (0.5, 0.5)
+                    plab.anchored_position = (cx, cy + 7)
+
+
+heat_screen = HeatScreen()
+EXTRA["heatmap"] = heat_screen
+
+
+# ------------------------------------------------------------- internet health
+# Ping to the internet and the router, Wi-Fi signal, a speed test of the board's own
+# download speed, router uptime over UPnP (if the router allows it) and the outage log.
+PING_HOST = os.getenv("PING_HOST") or "1.1.1.1"
+SPEED_URL = "https://speed.cloudflare.com/__down?bytes=400000"
+net_log = []          # (wall time it went down, wall time it came back)
+net_down_at = None
+
+
+def net_note(state):
+    """Called by the outage code: remembers when the connection dropped and came back."""
+    global net_down_at
+    if state == "down" and net_down_at is None:
+        net_down_at = time.time()
+    elif state == "up" and net_down_at is not None:
+        net_log.append((net_down_at, time.time()))
+        del net_log[:-5]
+        net_down_at = None
+
+
+class NetScreen(Screen):
+    N = 52                                  # ping samples in the graph
+
+    def __init__(self):
+        global root
+        Screen.__init__(self)
+        root = self.grp
+        self.sub, self.clock = _head("INTERNET", 0x2FA7E0)
+        self.pill = RoundRect(112, 5, 70, 15, 4, fill=0x1E9E50)
+        root.append(self.pill)
+        self.pill_lbl = text(F_SMALL, "ONLINE", 147, 12, WHITE, center=True)
+        text(F_SMALL, "PING " + PING_HOST, 8, 26, 0x8A9099)
+        self.ping = text(F_NEWS, "--", 8, 36, WHITE)
+        self.ping_sub = text(F_SMALL, "", 8, 68, 0x8A9099)
+        self.g = displayio.Bitmap(self.N * 3, 46, 5)
+        gp = displayio.Palette(5)
+        gp[0], gp[1], gp[2], gp[3], gp[4] = 0x12161A, 0x2FA7E0, 0xFFB020, 0xE0443A, 0x2A3038
+        root.append(displayio.TileGrid(self.g, pixel_shader=gp, x=316 - self.N * 3, y=28))
+        self.samples = []
+        self.t_router = _tile(4, 82, 101, 38, "ROUTER PING")
+        self.t_wifi_lab, self.t_wifi = _tile(109, 82, 101, 38, "WI-FI SIGNAL", both=True)
+        self.t_speed = _tile(214, 82, 102, 38, "SPEED (BOARD)")
+        self.t_rup = _tile(4, 126, 101, 38, "ROUTER UP")
+        self.t_on = _tile(109, 126, 101, 38, "ONLINE FOR")
+        self.t_out = _tile(214, 126, 102, 38, "LAST OUTAGE")
+        self.last_ping = self.last_speed = self.last_upnp = -1e6
+        self.speed_now = False
+        self.upnp_ctl = None
+        self.upnp_tries = 0
+        self.router_up = None           # (uptime seconds, monotonic when read)
+        self.started = time.monotonic()
+
+    def refresh(self):
+        self.last_ping = -1e6
+
+    def tick(self, now):
+        showing_me = self.grp is display.root_group
+        if now - self.last_ping > (5 if showing_me else 60):
+            self.last_ping = now
+            self.do_ping()
+        if net_state == "ok" and (self.speed_now or now - self.last_speed > 1800):
+            if showing_me or self.speed_now or self.last_speed < 0:
+                self.speed_now = False
+                self.last_speed = now
+                self.t_speed.text = "testing..."
+                safe(self.speed_test, "speed test")
+        if net_state == "ok" and showing_me and now - self.last_upnp > 600 and self.upnp_tries < 3:
+            self.last_upnp = now
+            try:
+                self.upnp()
+            except Exception as e:  # noqa: BLE001 - many routers have UPnP switched off
+                print("router uptime (UPnP):", repr(e))
+                self.upnp_tries += 1
+                if not self.router_up:
+                    self.t_rup.text = "n/a"
+                self.upnp_ctl = None
+            free_sockets()
+
+    def do_ping(self):
+        ms = gw = None
+        if wifi_up():
+            dog()
+            try:
+                t = wifi.radio.ping(ipaddress.ip_address(PING_HOST), timeout=1)
+                ms = None if t is None else t * 1000
+            except Exception as e:  # noqa: BLE001
+                print("ping:", repr(e))
+            try:
+                t = wifi.radio.ping(wifi.radio.ipv4_gateway, timeout=1)
+                gw = None if t is None else t * 1000
+            except Exception:  # noqa: BLE001
+                pass
+        self.samples.append(ms)
+        del self.samples[:-self.N]
+        self.t_router.text = "--" if gw is None else "%d ms" % gw
+        try:
+            rssi = wifi.radio.ap_info.rssi
+            word = "GREAT" if rssi > -55 else "GOOD" if rssi > -67 else "FAIR" if rssi > -75 else "WEAK"
+            self.t_wifi.text = "%d dBm" % rssi
+            self.t_wifi_lab.text = "WI-FI: " + word
+        except Exception:  # noqa: BLE001
+            self.t_wifi.text = "--"
+        self.draw()
+
+    def draw(self):
+        ok = [s for s in self.samples if s is not None]
+        last = self.samples[-1] if self.samples else None
+        self.ping.text = "timeout" if (self.samples and last is None) else ("--" if last is None
+                                                                           else "%d ms" % last)
+        self.ping.color = 0xE0443A if last is None else (WHITE if last < 100 else 0xFFB020)
+        if self.samples:
+            loss = 100 * (len(self.samples) - len(ok)) // len(self.samples)
+            self.ping_sub.text = ("avg %d ms  loss %d%%" % (sum(ok) / len(ok), loss)) if ok \
+                else "no replies"
+        g = self.g
+        g.fill(0)
+        for y in (11, 22, 33):                       # grid lines every 50 ms
+            bitmaptools.fill_region(g, 0, y, g.width, y + 1, 4)
+        x = g.width - 3 * len(self.samples)
+        for s in self.samples:
+            if s is None:
+                bitmaptools.fill_region(g, x, 0, x + 2, g.height, 3)
+            else:
+                h = max(2, min(g.height, int(s / 150 * g.height)))
+                bitmaptools.fill_region(g, x, g.height - h, x + 2, g.height, 1 if s < 100 else 2)
+            x += 3
+        self.status()
+
+    def status(self):
+        st = {"ok": ("ONLINE", 0x1E9E50), "noinet": ("OFFLINE", 0xC62828),
+              "nowifi": ("NO WI-FI", 0xC62828)}[net_state]
+        self.pill_lbl.text, self.pill.fill = st
+        wall = time.time()
+        if net_down_at is not None:
+            self.t_on.text = "down " + _ago(wall - net_down_at)
+        else:
+            since = net_log[-1][1] if net_log else None
+            self.t_on.text = _ago(wall - since) if since else _ago(time.monotonic() - self.started)
+        if net_log:
+            a, b = net_log[-1]
+            t = time.localtime(int(a))
+            self.t_out.text = "%02d:%02d %s" % (t.tm_hour, t.tm_min, _ago(b - a))
+        else:
+            self.t_out.text = "none"
+        if self.router_up:
+            up, at = self.router_up
+            self.t_rup.text = _ago(up + time.monotonic() - at)
+        elif self.upnp_tries >= 3:
+            self.t_rup.text = "n/a"
+
+    def second(self, hhmm):
+        Screen.second(self, hhmm)
+        if self.grp is display.root_group:
+            self.status()
+
+    def boot(self, now):
+        self.speed_now = True               # BOOT on this screen: run a speed test now
+
+    def speed_test(self):
+        n = 0
+        t0 = time.monotonic()
+        with requests.get(SPEED_URL, timeout=NET_TIMEOUT) as r:
+            for chunk in r.iter_content(chunk_size=4096):
+                n += len(chunk)
+                dog()
+        secs = max(0.001, time.monotonic() - t0)
+        mbps = n * 8 / secs / 1e6
+        self.t_speed.text = ("%.1f Mbps" % mbps if mbps < 100 else "%d Mbps" % mbps) if n > 10000 \
+            else "failed"
+
+    def upnp(self):
+        """Ask the router how long its internet link has been up (UPnP GetStatusInfo)."""
+        if not self.upnp_ctl:
+            msg = ("M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\n"
+                   "MX: 2\r\nST: urn:schemas-upnp-org:device:InternetGatewayDevice:1\r\n\r\n")
+            buf = bytearray(1024)
+            with pool.socket(pool.AF_INET, pool.SOCK_DGRAM) as s:
+                s.settimeout(3)
+                s.sendto(msg.encode(), ("239.255.255.250", 1900))
+                n, _ = s.recvfrom_into(buf)
+            reply = _text(bytes(buf[:n]))
+            loc = None
+            for line in reply.split("\r\n"):
+                if line.lower().startswith("location:"):
+                    loc = line.split(":", 1)[1].strip()
+            if not loc:
+                raise RuntimeError("no LOCATION in reply")
+            with requests.get(loc, timeout=NET_TIMEOUT) as r:
+                desc = r.text
+            for svc in ("WANIPConnection:1", "WANPPPConnection:1", "WANIPConnection:2"):
+                i = desc.find("urn:schemas-upnp-org:service:" + svc)
+                if i >= 0:
+                    a = desc.find("<controlURL>", i) + 12
+                    ctl = desc[a:desc.find("</controlURL>", a)].strip()
+                    base = loc[:loc.find("/", 8)]
+                    self.upnp_ctl = (ctl if ctl.startswith("http") else base + ctl, svc)
+                    break
+            if not self.upnp_ctl:
+                raise RuntimeError("router has no WAN connection service")
+        url, svc = self.upnp_ctl
+        st = "urn:schemas-upnp-org:service:" + svc
+        body = ('<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"'
+                ' s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"><s:Body>'
+                '<u:GetStatusInfo xmlns:u="%s"></u:GetStatusInfo></s:Body></s:Envelope>' % st)
+        with requests.post(url, data=body, timeout=NET_TIMEOUT,
+                           headers={"Content-Type": 'text/xml; charset="utf-8"',
+                                    "SOAPAction": '"%s#GetStatusInfo"' % st}) as r:
+            xml = r.text
+        a = xml.find("<NewUptime>")
+        if a < 0:
+            raise RuntimeError("no uptime in reply")
+        up = int(xml[a + 11:xml.find("</NewUptime>")].strip())
+        self.router_up = (up, time.monotonic())
+        self.upnp_tries = 0
+
+
+net_screen = NetScreen()
+EXTRA["net"] = net_screen
+
+
+# ------------------------------------------------------------- trivia
+# A multiple-choice question; the answer lights up after TRIVIA_SECONDS. BOOT reveals it
+# early, then moves on. Questions: Open Trivia DB (free). Offline: a built-in set.
+TRIVIA_SECONDS = max(5, int(os.getenv("TRIVIA_SECONDS") or "30"))
+TRIVIA_REVEAL = 8
+TRIVIA_CATEGORY = os.getenv("TRIVIA_CATEGORY") or ""     # e.g. "9" general, "17" science, "23" history
+TRIVIA_FALLBACK = (
+    ("Which planet is known as the Red Planet?", "Mars", "Venus", "Jupiter", "Mercury"),
+    ("What is the capital of Australia?", "Canberra", "Sydney", "Melbourne", "Perth"),
+    ("Which gas do plants absorb from the air for photosynthesis?", "Carbon dioxide", "Oxygen",
+     "Nitrogen", "Hydrogen"),
+    ("Who wrote the Indian national anthem 'Jana Gana Mana'?", "Rabindranath Tagore",
+     "Bankim Chandra Chatterjee", "Sarojini Naidu", "Muhammad Iqbal"),
+    ("How many players are on the field for one team in a cricket match?", "11", "9", "10", "12"),
+    ("What is the chemical symbol for gold?", "Au", "Ag", "Gd", "Go"),
+    ("Which is the longest river in India?", "Ganga", "Godavari", "Yamuna", "Narmada"),
+    ("In which year did India launch Chandrayaan-3?", "2023", "2019", "2021", "2008"),
+    ("What does 'CPU' stand for?", "Central Processing Unit", "Computer Personal Unit",
+     "Central Program Utility", "Core Processing Unit"),
+    ("Which is the largest ocean on Earth?", "Pacific", "Atlantic", "Indian", "Arctic"),
+    ("Who was the first Indian to go to space?", "Rakesh Sharma", "Kalpana Chawla",
+     "Sunita Williams", "Ravish Malhotra"),
+    ("What is the hardest natural substance?", "Diamond", "Quartz", "Graphite", "Topaz"),
+    ("Which instrument is Ustad Zakir Hussain famous for?", "Tabla", "Sitar", "Sarod", "Santoor"),
+    ("How many bits are in a byte?", "8", "4", "16", "10"),
+    ("Which city is called the Pink City of India?", "Jaipur", "Udaipur", "Jodhpur", "Bhopal"),
+)
+
+
+class TriviaScreen(Screen):
+    dwell = TRIVIA_SECONDS + TRIVIA_REVEAL + 1
+
+    def __init__(self):
+        global root
+        Screen.__init__(self)
+        root = self.grp
+        self.sub, self.clock = _head("TRIVIA", 0xFFB020)
+        self.bar_pal = displayio.Palette(1)
+        self.bar_pal[0] = 0xFFB020
+        self.bar = vectorio.Rectangle(pixel_shader=self.bar_pal, width=312, height=3, x=4, y=24)
+        root.append(self.bar)
+        self.q_med = [text(F_MED, "", 6, 31 + i * 18, WHITE) for i in range(4)]
+        self.q_small = [text(F_SMALL, "", 6, 31 + i * 12, WHITE) for i in range(6)]
+        self.cells = []
+        for i in range(4):
+            x, y = 4 + (i % 2) * 158, 108 + (i // 2) * 31
+            box = RoundRect(x, y, 154, 28, 5, fill=0x1C2128)
+            root.append(box)
+            letter = text(F_TITLE, "ABCD"[i], x + 8, y + 4, 0xFFB020)
+            med = text(F_MED, "", x + 26, y + 5, 0xE6EAEE)
+            small = text(F_SMALL, "", x + 26, y + 8, 0xE6EAEE)
+            self.cells.append((box, letter, med, small))
+        self.queue = []
+        self.q = None
+        self.t0 = 0.0
+        self.revealed = False
+        self.token = None
+        self.last_fetch = -1e6
+        self.fallback_i = random.randint(0, len(TRIVIA_FALLBACK) - 1)
+
+    def tick(self, now):
+        if len(self.queue) < 3 and now - self.last_fetch > 60 and net_state == "ok":
+            self.last_fetch = now
+            safe(self.fetch, "trivia")
+
+    def fetch(self):
+        if not self.token:
+            with requests.get("https://opentdb.com/api_token.php?command=request",
+                              timeout=NET_TIMEOUT) as r:
+                self.token = r.json().get("token")
+        url = "https://opentdb.com/api.php?amount=15&type=multiple&encode=url3986"
+        if TRIVIA_CATEGORY:
+            url += "&category=" + TRIVIA_CATEGORY
+        if self.token:
+            url += "&token=" + self.token
+        with requests.get(url, timeout=NET_TIMEOUT) as r:
+            d = r.json()
+        if d.get("response_code") in (3, 4):        # token expired or used up: start a new one
+            self.token = None
+        for it in d.get("results", []):
+            opts = [unquote(it["correct_answer"])] + [unquote(x) for x in it["incorrect_answers"]]
+            self.queue.append((unquote(it["question"]), opts, unquote(it.get("category", "")),
+                               it.get("difficulty", "")))
+
+    def next(self, now):
+        if self.queue:
+            q, opts, cat, diff = self.queue.pop(0)
+        else:                                        # offline: the built-in questions
+            f = TRIVIA_FALLBACK[self.fallback_i % len(TRIVIA_FALLBACK)]
+            self.fallback_i += 1
+            q, opts, cat, diff = f[0], list(f[1:]), "General", ""
+        right = opts[0]
+        opts = _shuffle(list(opts))
+        self.q = (q, opts, opts.index(right))
+        self.sub.text = ("%s %s" % (cat.split(":")[-1].strip(), diff)).upper()[:26]
+        rows, fits = wrap_px(F_MED, q, 306, 4)
+        if fits:
+            for i, lbl in enumerate(self.q_med):
+                lbl.text = rows[i] if i < len(rows) else ""
+            for lbl in self.q_small:
+                lbl.text = ""
+        else:
+            rows, _ = wrap_px(F_SMALL, q, 306, 6)
+            for i, lbl in enumerate(self.q_small):
+                lbl.text = rows[i] if i < len(rows) else ""
+            for lbl in self.q_med:
+                lbl.text = ""
+        for i, (box, letter, med, small) in enumerate(self.cells):
+            o = opts[i]
+            box.fill = 0x1C2128
+            letter.color = 0xFFB020
+            if px_width(F_MED, o) <= 124:
+                med.text, small.text = o, ""
+            else:
+                med.text, small.text = "", (o if len(o) <= 21 else o[:20] + ".")
+            med.color = small.color = 0xE6EAEE
+        self.t0 = now
+        self.revealed = False
+        self.bar_pal[0] = 0xFFB020
+
+    def reveal(self, now):
+        self.revealed = True
+        self.t0 = now
+        self.bar.width = 312
+        self.bar_pal[0] = 0x1E9E50
+        for i, (box, letter, med, small) in enumerate(self.cells):
+            if i == self.q[2]:
+                box.fill = 0x1E9E50
+                letter.color = med.color = small.color = WHITE
+            else:
+                letter.color = med.color = small.color = 0x5A6068
+
+    def enter(self, now):
+        if self.q is None or self.revealed:
+            self.next(now)
+        else:
+            self.t0 = now                            # a fresh 30 s for an unanswered question
+
+    def frame(self, now):
+        if self.q is None:
+            self.next(now)
+        el = now - self.t0
+        if not self.revealed:
+            self.bar.width = max(1, int(312 * (1 - el / TRIVIA_SECONDS)))
+            if el >= TRIVIA_SECONDS:
+                self.reveal(now)
+        elif el >= TRIVIA_REVEAL:
+            self.next(now)
+
+    def boot(self, now):
+        if self.revealed:
+            self.next(now)
+        else:
+            self.reveal(now)
+
+
+trivia_screen = TriviaScreen()
+EXTRA["trivia"] = trivia_screen
+
+
+# ------------------------------------------------------------- virtual pet
+# A little sprout creature. Its leaf and face follow today's portfolio move, it gets
+# hungry if nobody presses BOOT (feed) for a while, and it sleeps at night.
+# Kept in NVM: birthday, last meal and number of meals.
+PET_NAME = (os.getenv("PET_NAME") or "Moong")[:10]
+PET_NVM = 64          # nvm[64] "P", [65:69] born, [69:73] last fed, [73:75] meals
+PCOL = (0, 0xF6C177, 0xD99A55, 0x5A3A22, 0x1B1B1B, 0xFFFFFF, 0xFF8FA3, 0x7A2E2E,
+        0x5BD16B, 0x2E8B3E, 0xA8834A, 0x6EC6FF, 0xE0A030, 0xFF4D6D)
+P_BODY, P_SHADE, P_LINE, P_EYE, P_SHINE, P_CHEEK, P_MOUTH, P_LEAF, P_LEAF2, P_WILT, \
+    P_TEAR, P_FOOD, P_HEART = range(1, 14)
+
+
+def _ellipse(bmp, cx, cy, rx, ry, v):
+    for dy in range(-ry, ry + 1):
+        half = int(rx * (1 - (dy / ry) ** 2) ** 0.5 + 0.5) if ry else rx
+        bitmaptools.fill_region(bmp, max(0, cx - half), cy + dy, min(bmp.width, cx + half + 1),
+                                cy + dy + 1, v)
+
+
+class PetScreen(Screen):
+    W, H = 56, 50
+
+    def __init__(self):
+        global root
+        Screen.__init__(self)
+        root = self.grp
+        self.sub, self.clock = _head(PET_NAME.upper(), 0x5BD16B, "YOUR PORTFOLIO PET")
+        sh = displayio.Palette(1)
+        sh[0] = 0x1C2026
+        root.append(vectorio.Polygon(pixel_shader=sh, x=68, y=138, points=[
+            (int(32 * math.cos(a * math.pi / 8)), int(5 * math.sin(a * math.pi / 8))) for a in range(16)]))
+        self.bmp = displayio.Bitmap(self.W, self.H, len(PCOL))
+        pp = displayio.Palette(len(PCOL))
+        for i, c in enumerate(PCOL):
+            pp[i] = c
+        pp.make_transparent(0)
+        self.pal = pp
+        self.sprite = displayio.Group(scale=2, x=12, y=36)
+        self.sprite.append(displayio.TileGrid(self.bmp, pixel_shader=pp))
+        root.append(self.sprite)
+        hp = displayio.Palette(1)
+        hp[0] = 0xFF4D6D
+        self.heart = vectorio.Polygon(pixel_shader=hp, points=[(0, 2), (2, 0), (4, 2), (6, 0), (8, 2),
+                                                               (4, 7)], x=0, y=0)
+        self.heart.hidden = True
+        root.append(self.heart)
+        tp = displayio.Palette(1)
+        tp[0] = 0x6EC6FF
+        self.tear = vectorio.Circle(pixel_shader=tp, radius=3, x=0, y=0)
+        self.tear.hidden = True
+        root.append(self.tear)
+        self.zzz = text(F_TITLE, "", 112, 40, 0xB0C4FF)
+        root.append(RoundRect(134, 30, 182, 64, 8, fill=0x1C2128))
+        self.say = [text(F_MED, "", 142, 36 + i * 18, WHITE) for i in range(3)]
+        text(F_SMALL, "FULL", 134, 102, 0x8A9099)
+        text(F_SMALL, "MOOD", 134, 120, 0x8A9099)
+        self.bars = []
+        for y in (103, 121):
+            bp = displayio.Palette(2)
+            bp[0], bp[1] = 0x2A3038, 0x5BD16B
+            b = displayio.Bitmap(140, 8, 2)
+            root.append(displayio.TileGrid(b, pixel_shader=bp, x=170, y=y))
+            self.bars.append((b, bp))
+        self.info = text(F_SMALL, "", 134, 140, 0x8A9099)
+        self.hint = text(F_SMALL, "BOOT = feed", 134, 154, 0x5A6068)
+        self.born, self.fed, self.meals = self.load()
+        self.state = None
+        self.face = None
+        self.eat_until = 0.0
+        self.thanks_until = 0.0
+        self.next_blink = 0.0
+        self.blink_until = 0.0
+        self.anim_t = 0.0
+        self.said = None
+
+    # -- persistence
+    def load(self):
+        try:
+            nv = microcontroller.nvm
+            if nv[PET_NVM] == ord("P"):
+                born, fed, meals = struct.unpack("<IIH", bytes(nv[PET_NVM + 1:PET_NVM + 11]))
+                return born, fed, meals
+        except Exception:  # noqa: BLE001
+            pass
+        return 0, 0, 0
+
+    def save(self):
+        try:
+            microcontroller.nvm[PET_NVM:PET_NVM + 11] = b"P" + struct.pack(
+                "<IIH", int(self.born), int(self.fed), self.meals)
+        except Exception as e:  # noqa: BLE001
+            print("pet save failed:", repr(e))
+
+    def feed(self, now):
+        wall = int(time.time())
+        if time.localtime().tm_year < 2024:   # clock not set yet: can't keep time
+            return
+        if not self.born:
+            self.born = wall
+        self.fed = wall
+        self.meals = min(65535, self.meals + 1)
+        self.save()
+        self.eat_until = now + 3
+        self.thanks_until = now + 12
+
+    # -- what it feels
+    def hours_hungry(self):
+        if not self.fed or time.localtime().tm_year < 2024:
+            return 0 if not self.fed and not self.born else 99
+        return (time.time() - self.fed) / 3600
+
+    def mood(self, now):
+        t = time.localtime()
+        if not self.born:
+            return "happy" if not (is_night(t) or t.tm_hour < 6) else "sleep"
+        if is_night(t) or t.tm_hour < 6:
+            return "sleep"
+        if now < self.eat_until:
+            return "eat"
+        if self.born and self.hours_hungry() > 8:
+            return "hungry"
+        pct = port_day_pct
+        if pct is None:
+            return "meh"
+        if pct >= 1.5:
+            return "ecstatic"
+        if pct >= 0:
+            return "happy"
+        return "sad" if pct > -1.5 else "worried"
+
+    def words(self, mood, now):
+        pct = port_day_pct
+        if now < self.thanks_until and mood != "eat":
+            return "Thank you! That was yummy."
+        if not self.born:
+            return "Hi! I'm %s. Press BOOT to give me my first meal!" % PET_NAME
+        closed = not market_open()
+        return {
+            "sleep": "Zzz... see you in the morning.",
+            "eat": "Nom nom nom!",
+            "hungry": ("I haven't eaten in a whole day..." if self.hours_hungry() > 24
+                       else "I'm hungry! Press BOOT to feed me."),
+            "meh": "Log in to Kite so I know how we're doing!",
+            "ecstatic": "%+.1f%% today! Best. Day. Ever!" % pct,
+            "happy": ("Market's shut. We ended %+.1f%%. Nice!" % pct) if closed
+            else "We're up %+.1f%% today. Wheee!" % pct,
+            "sad": ("Market's shut. We ended %+.1f%%." % pct) if closed
+            else "Down %+.1f%%... hug me?" % pct,
+            "worried": "Ouch, %+.1f%% today. Hold steady!" % pct,
+        }[mood]
+
+    # -- drawing
+    def draw(self, mood, blink, mouth_open):
+        b = self.bmp
+        b.fill(0)
+        cx, cy = 28, 31
+        wilt = mood in ("sad", "worried", "hungry")
+        # sprout
+        leaf, leaf2 = (P_WILT, P_WILT) if wilt else (P_LEAF, P_LEAF2)
+        bitmaptools.draw_line(b, cx, cy - 15, cx, cy - 21, leaf2)
+        if wilt:
+            _ellipse(b, cx - 5, cy - 17, 4, 2, leaf)
+            _ellipse(b, cx + 5, cy - 17, 4, 2, leaf)
+        else:
+            _ellipse(b, cx - 5, cy - 23, 5, 3, leaf)
+            _ellipse(b, cx + 5, cy - 24, 5, 3, leaf)
+            bitmaptools.draw_line(b, cx - 8, cy - 23, cx - 2, cy - 23, leaf2)
+            bitmaptools.draw_line(b, cx + 2, cy - 24, cx + 8, cy - 24, leaf2)
+        # feet, body, shading
+        _ellipse(b, cx - 9, cy + 15, 5, 3, P_LINE)
+        _ellipse(b, cx + 9, cy + 15, 5, 3, P_LINE)
+        _ellipse(b, cx, cy, 21, 16, P_LINE)
+        _ellipse(b, cx, cy, 20, 15, P_SHADE)
+        _ellipse(b, cx - 1, cy - 2, 18, 13, P_BODY)
+        # eyes
+        for ex in (cx - 7, cx + 7):
+            ey = cy - 2
+            if mood == "sleep" or blink:
+                bitmaptools.draw_line(b, ex - 2, ey, ex + 2, ey, P_EYE)
+            elif mood in ("ecstatic", "happy", "eat"):
+                bitmaptools.draw_line(b, ex - 2, ey + 1, ex, ey - 1, P_EYE)
+                bitmaptools.draw_line(b, ex, ey - 1, ex + 2, ey + 1, P_EYE)
+            else:
+                _ellipse(b, ex, ey, 2, 3, P_EYE)
+                b[ex - 1, ey - 2] = P_SHINE
+                if mood in ("sad", "worried"):            # worried brows
+                    d = 1 if ex < cx else -1
+                    bitmaptools.draw_line(b, ex - 2, ey - 5 - d, ex + 2, ey - 5 + d, P_LINE)
+        # cheeks
+        if mood in ("ecstatic", "happy", "eat"):
+            _ellipse(b, cx - 13, cy + 3, 3, 1, P_CHEEK)
+            _ellipse(b, cx + 13, cy + 3, 3, 1, P_CHEEK)
+        # mouth
+        my = cy + 5
+        if mood == "eat" and mouth_open or mood == "worried":
+            _ellipse(b, cx, my + 1, 2, 2, P_MOUTH)
+        elif mood == "ecstatic":
+            _ellipse(b, cx, my + 1, 4, 3, P_MOUTH)
+            bitmaptools.fill_region(b, cx - 4, my - 2, cx + 5, my + 1, P_BODY)
+        elif mood in ("happy", "eat"):
+            for x, y in ((-3, 0), (-2, 1), (-1, 1), (0, 1), (1, 1), (2, 1), (3, 0)):
+                b[cx + x, my + y] = P_MOUTH
+        elif mood in ("sad",):
+            for x, y in ((-3, 1), (-2, 0), (-1, 0), (0, 0), (1, 0), (2, 0), (3, 1)):
+                b[cx + x, my + y] = P_MOUTH
+        elif mood == "hungry":
+            _ellipse(b, cx, my, 3, 1, P_MOUTH)
+        else:
+            bitmaptools.draw_line(b, cx - 2, my, cx + 2, my, P_MOUTH)
+        if mood == "eat":                                    # the snack
+            _ellipse(b, cx + 9, my + 2, 2, 2, P_FOOD)
+
+    def bar(self, i, frac, colour):
+        b, p = self.bars[i]
+        p[1] = colour
+        b.fill(0)
+        w = int(max(0.0, min(1.0, frac)) * b.width)
+        if w:
+            bitmaptools.fill_region(b, 0, 0, w, b.height, 1)
+
+    def enter(self, now):
+        self.face = None
+        self.said = None
+
+    def boot(self, now):
+        if self.mood(now) != "sleep":
+            self.feed(now)
+
+    def frame(self, now):
+        mood = self.mood(now)
+        if now > self.next_blink:
+            self.blink_until = now + 0.15
+            self.next_blink = now + 2.5 + random.random() * 3
+        blink = now < self.blink_until
+        mouth = mood == "eat" and int(now * 4) % 2 == 0
+        face = (mood, blink, mouth)
+        if face != self.face:
+            self.face = face
+            self.draw(mood, blink, mouth)
+        # body language
+        phase = now % 3.0
+        y = 36
+        if mood == "ecstatic" and phase < 0.3 or mood == "happy" and phase < 0.2:
+            y = 26                                           # a little hop
+        elif mood in ("meh", "sad", "worried", "hungry", "happy", "ecstatic"):
+            y = 36 + (2 if int(now * 2) % 2 else 0)          # breathing
+        x = 12 + (1 if mood == "hungry" and int(now * 8) % 16 == 0 else 0)
+        if (self.sprite.x, self.sprite.y) != (x, y):
+            self.sprite.x, self.sprite.y = x, y
+        # hearts, tears, z's
+        self.heart.hidden = mood != "ecstatic" and now >= self.thanks_until
+        if not self.heart.hidden:
+            k = (now % 1.6) / 1.6
+            self.heart.x, self.heart.y = 98, int(52 - 30 * k)
+        self.tear.hidden = mood not in ("sad", "worried")
+        if not self.tear.hidden:
+            k = (now % 1.8) / 1.8
+            self.tear.x, self.tear.y = 50, int(y + 62 + 22 * k)
+        if mood == "sleep":
+            self.zzz.text = ("z", "z Z", "z Z z")[int(now) % 3]
+        elif self.zzz.text:
+            self.zzz.text = ""
+        if int(now) != self.said:                            # words and bars once a second
+            self.said = int(now)
+            rows, _ = wrap_px(F_MED, self.words(mood, now), 168, 3)
+            for i, lbl in enumerate(self.say):
+                lbl.text = rows[i] if i < len(rows) else ""
+            full = 1 - min(12, self.hours_hungry()) / 12 if self.born else 0
+            self.bar(0, full, 0x5BD16B if full > 0.4 else 0xFFB020 if full > 0.15 else 0xE0443A)
+            pct = port_day_pct
+            m = 0.5 if pct is None else 0.5 + max(-3, min(3, pct)) / 6
+            self.bar(1, m, 0x5BD16B if m >= 0.5 else 0xE0443A)
+            if self.born and time.localtime().tm_year >= 2024:
+                age = int((time.time() - self.born) // 86400)
+                self.info.text = "Age %d day%s, %d meal%s" % (
+                    age, "" if age == 1 else "s", self.meals, "" if self.meals == 1 else "s")
+                self.hint.text = "Fed %s ago - BOOT feeds" % _ago(time.time() - self.fed)
+            else:
+                self.info.text = "Not born yet"
+                self.hint.text = "BOOT = first meal"
+
+
+pet_screen = PetScreen()
+EXTRA["pet"] = pet_screen
+
+
+# ------------------------------------------------------------- night screensavers
+# NIGHT_SCREEN = "clock" (default), "matrix", "fire", "stars" or "cycle" (changes every hour).
+# They can also go in SCREEN_ORDER for the daytime rotation.
+class Saver(Screen):
+    def __init__(self, clock_xy, colour):
+        global root
+        Screen.__init__(self)
+        root = self.grp
+        self.build()
+        root = self.grp
+        self.clock = text(F_TITLE, "--:--", clock_xy[0], clock_xy[1], colour, right=True)
+        self.last = 0.0
+
+    def build(self):
+        pass
+
+    def frame(self, now):
+        if now - self.last >= 0.05:              # ~20 frames a second at most
+            self.last = now
+            self.step()
+
+    def step(self):
+        pass
+
+
+class MatrixRain(Saver):
+    COLS, ROWS = 53, 14
+    CHARS = "0123456789ABCDEFHKLMNPRTUVXZ$+-*=<>:#"
+
+    def build(self):
+        # glyph sheet: every character mirrored, 6x12 each, tile 0 blank
+        sheet = displayio.Bitmap(6 * (len(self.CHARS) + 1), 12, 2)
+        strip = render_strip(terminalio.FONT, self.CHARS, 12, 10)
+        for i in range(len(self.CHARS)):
+            for xx in range(6):
+                for yy in range(12):
+                    if strip[i * 6 + xx, yy]:
+                        sheet[(i + 1) * 6 + (5 - xx), yy] = 1
+        self.layers = []
+        for colour in (0x0B4A1C, 0x1FBF4A, 0xC8FFD0):          # tail, body, head
+            p = displayio.Palette(2)
+            p[0], p[1] = 0, colour
+            p.make_transparent(0)
+            tg = displayio.TileGrid(sheet, pixel_shader=p, width=self.COLS, height=self.ROWS,
+                                    tile_width=6, tile_height=12, default_tile=0, x=1, y=1)
+            self.grp.append(tg)
+            self.layers.append(tg)
+        n = len(self.CHARS)
+        self.rnd = lambda: random.randint(1, n)
+        self.drops = [[-1.0, 0.0, 0, random.randint(0, 60)] for _ in range(self.COLS)]
+
+    def _set(self, layer, c, r, v):
+        if 0 <= r < self.ROWS:
+            self.layers[layer][c, r] = v
+
+    def step(self):
+        tail, body, head = 0, 1, 2
+        for c, d in enumerate(self.drops):
+            pos, speed, ln, wait = d
+            if speed == 0:
+                if wait > 0:
+                    d[3] = wait - 1
+                    continue
+                d[0], d[1], d[2] = -1.0, 0.3 + random.random() * 0.6, random.randint(4, 11)
+                continue
+            old = int(pos)
+            pos += speed
+            d[0] = pos
+            for r in range(old + 1, int(pos) + 1):
+                self._set(head, c, r, self.rnd())
+                self._set(head, c, r - 1, 0)
+                self._set(body, c, r - 1, self.rnd())
+                self._set(body, c, r - 1 - ln, 0)
+                self._set(tail, c, r - 1 - ln, self.rnd())
+                self._set(tail, c, r - 4 - ln, 0)
+                if r - 4 - ln >= self.ROWS:
+                    d[1], d[3] = 0.0, random.randint(0, 40)
+        for _ in range(4):                                     # a few glyphs flicker
+            c, r = random.randint(0, self.COLS - 1), random.randint(0, self.ROWS - 1)
+            if self.layers[body][c, r]:
+                self.layers[body][c, r] = self.rnd()
+
+
+class Fire(Saver):
+    W, H = 64, 34
+
+    def build(self):
+        n = 37
+        self.bmp = displayio.Bitmap(self.W, self.H, n)
+        p = displayio.Palette(n)
+        for i, c in enumerate(ramp((0x000000, 0x1F0707, 0x8F2707, 0xDF4F07, 0xCF7F0F,
+                                    0xBFA727, 0xEFEFC7, 0xFFFFFF), n)):
+            p[i] = c
+        self.grp.append(displayio.Group(scale=5))
+        self.grp[0].append(displayio.TileGrid(self.bmp, pixel_shader=p))
+        self.buf = bytearray(self.W * self.H)
+        for x in range(self.W):
+            self.buf[(self.H - 1) * self.W + x] = n - 1
+        self.rnd = bytes(random.randint(0, 3) for _ in range(997))
+        self.ri = 0
+        self.n = n
+
+    def step(self):
+        W, buf, rnd = self.W, self.buf, self.rnd
+        ri = self.ri
+        bottom = (self.H - 1) * W
+        for x in range(W):                                     # the fuel line flickers a little
+            if rnd[(ri + x) % 997] == 0:
+                buf[bottom + x] = self.n - 1 - rnd[(ri + 3 * x) % 997] * 3
+        for src in range(W, W * self.H):
+            p = buf[src]
+            if p == 0:
+                buf[src - W] = 0
+            else:
+                r = rnd[ri]
+                ri += 1
+                if ri >= 997:
+                    ri = 0
+                dst = src - r + 1 - W
+                if dst >= 0:
+                    buf[dst] = p - r if p > r else 0    # cools as it rises: ~2/3 of the screen
+        self.ri = ri
+        bitmaptools.arrayblit(self.bmp, buf)
+
+
+class Stars(Saver):
+    N = 70
+
+    def build(self):
+        self.bmp = displayio.Bitmap(320, 170, 4)
+        p = displayio.Palette(4)
+        p[0], p[1], p[2], p[3] = 0x000000, 0x3A3F55, 0x9AA3C7, 0xFFFFFF
+        self.grp.append(displayio.TileGrid(self.bmp, pixel_shader=p))
+        self.stars = [self.new(True) for _ in range(self.N)]
+
+    def new(self, anywhere=False):
+        return [random.uniform(-1, 1), random.uniform(-1, 1),
+                random.uniform(0.15, 1.0) if anywhere else 1.0, -1, -1, 0]
+
+    def step(self):
+        b = self.bmp
+        for i, s in enumerate(self.stars):
+            x, y, z, px, py, size = s
+            if px >= 0:                                        # erase where it was
+                b[px, py] = 0
+                if size and px + 1 < 320 and py + 1 < 170:
+                    b[px + 1, py] = b[px, py + 1] = b[px + 1, py + 1] = 0
+            z -= 0.008
+            if z > 0.02:
+                sx, sy = int(160 + x / z * 130), int(85 + y / z * 70)
+            if z <= 0.02 or not (0 <= sx < 319 and 0 <= sy < 169):
+                self.stars[i] = self.new()
+                continue
+            c = 3 if z < 0.35 else 2 if z < 0.7 else 1
+            big = 1 if z < 0.25 else 0
+            b[sx, sy] = c
+            if big:
+                b[sx + 1, sy] = b[sx, sy + 1] = b[sx + 1, sy + 1] = c
+            s[2], s[3], s[4], s[5] = z, sx, sy, big
+
+
+EXTRA["matrix"] = MatrixRain((314, 150), 0x1A6A30)
+EXTRA["fire"] = Fire((314, 4), 0x5A3A2A)
+EXTRA["stars"] = Stars((314, 150), 0x4A5068)
+SAVERS = ("matrix", "fire", "stars")
+NIGHT_SCREEN = (os.getenv("NIGHT_SCREEN") or "clock").strip().lower()
+EXTRA_LIST = list(EXTRA.values())
+
+
+def night_name(t):
+    """Which screen shows at night."""
+    if NIGHT_SCREEN == "cycle":
+        return (SAVERS + ("clock",))[t.tm_hour % 4]
+    return NIGHT_SCREEN if NIGHT_SCREEN in EXTRA else "clock"
+
+
+
 # ============================================================= state + helpers
 # screens, in the order set by SCREEN_ORDER (comma separated names)
 ALL_SCREENS = {"weather": weather_grp, "portfolio": port_grp, "markets": mkt_grp,
                "cricket": cric_grp, "news": news_grp, "clock": clock_grp}
+for _n, _s in EXTRA.items():
+    ALL_SCREENS[_n] = _s.grp
 TICKERS = {"weather": weather_ticker, "portfolio": port_ticker, "markets": mkt_ticker,
            "cricket": cric_ticker}
 ORDER = [n.strip() for n in (os.getenv("SCREEN_ORDER") or
-                             "weather,portfolio,markets,cricket,news").split(",")
+                             "weather,portfolio,heatmap,markets,cricket,stat,news,trivia,net,pet"
+                             ).split(",")
          if n.strip() in ALL_SCREENS] or ["weather"]
 screen = 0
 display.root_group = ALL_SCREENS[ORDER[0]]
@@ -1404,9 +2736,11 @@ def kite_load():
 
 
 def show_login_needed(reason):
-    global kite_token, kite_status
+    global kite_token, kite_status, port_day_pct
     kite_token = None
     kite_forget()
+    port_day_pct = None
+    heat_screen.update(None)
     kite_status = reason
     lbl_day.text = "--"
     lbl_tot.text = "--"
@@ -1431,8 +2765,10 @@ def get_portfolio():
     if d.get("status") != "success":
         raise RuntimeError(d.get("message", "holdings failed"))
 
+    global port_day_pct
     invested = current = day = 0.0
     movers = []
+    heat_rows = []
     for h in d["data"]:
         qty = (h.get("quantity") or 0) + (h.get("t1_quantity") or 0)
         if qty <= 0:
@@ -1444,12 +2780,16 @@ def get_portfolio():
         if close:
             day += (last - close) * qty
             movers.append(((last - close) / close * 100, h.get("tradingsymbol", "?")))
+        heat_rows.append((h.get("tradingsymbol", "?"), last * qty,
+                          (last - close) / close * 100 if close else 0.0))
     total = current - invested
 
     lbl_day.text = inr(day, signed=True)
     lbl_day.color = GREEN if day >= 0 else RED
     base = current - day
     day_pct = day / base * 100 if base else 0
+    port_day_pct = day_pct
+    heat_screen.update(heat_rows)
     lbl_day_pct.text = "%+.2f%%" % day_pct
     lbl_day_pct.color = lbl_day.color
     lbl_tot.text = inr(total, signed=True)
@@ -2052,48 +3392,6 @@ def get_news():
         raise net_err                  # every source failed and the network looks down
 
 
-def px_width(font, t):
-    w = 0
-    for ch in t:
-        g = font.get_glyph(ord(ch))
-        if g:
-            w += g.shift_x
-    return w
-
-
-def wrap_px(font, t, width, lines):
-    """Word-wrap `t` to `width` pixels. Returns (lines, fits)."""
-    out, cur = [], ""
-    space = px_width(font, " ")
-    cur_w = 0
-    for word in t.split():
-        ww = px_width(font, word)
-        if cur and cur_w + space + ww <= width:
-            cur += " " + word
-            cur_w += space + ww
-            continue
-        if cur:
-            out.append(cur)
-        cur, cur_w = word, ww
-        while cur_w > width and len(cur) > 1:      # one very long "word"
-            k = len(cur) - 1
-            while k > 1 and px_width(font, cur[:k]) > width:
-                k -= 1
-            out.append(cur[:k])
-            cur = cur[k:]
-            cur_w = px_width(font, cur)
-    if cur:
-        out.append(cur)
-    if len(out) <= lines:
-        return out, True
-    out = out[:lines]
-    last = out[-1]
-    while last and px_width(font, last + "...") > width:
-        last = last[:last.rfind(" ")] if " " in last else last[:-1]
-    out[-1] = last.rstrip(",;:-") + "..."
-    return out, False
-
-
 def _put_lines(labels, font, rows, pitch):
     top = NEWS_TOP + (NEWS_BOT - NEWS_TOP - pitch * len(rows)) // 2
     for i, lbl in enumerate(labels):
@@ -2223,6 +3521,7 @@ def set_offline(state, now_m):
     net_state = state
     reconnect_wait = 10
     show_badge("NO WI-FI" if state == "nowifi" else "OFFLINE")
+    net_note("down")
     print("network:", state)
 
 
@@ -2246,6 +3545,7 @@ def back_online():
     fail_streak = 0
     refresh_all = True
     show_badge(None)
+    net_note("up")
     print("network: back online at", ip)
 
 
@@ -2368,7 +3668,9 @@ def home(request: Request):
                         '<p style="margin-top:16px"><a href="/rotate?on=%d" style="background:#444">'
                         'Auto-rotate screens: %s (tap to turn %s)</a></p>'
                         '<p style="margin-top:16px"><a href="/theme" style="background:#444">'
-                        'Look: %s (change)</a></p></body>'
+                        'Look: %s (change)</a></p>'
+                        '<p style="margin-top:16px"><a href="/pet" style="background:#444">Pet</a> '
+                        '<a href="/stat/debug" style="background:#444">Stat feed</a></p></body>'
                         % (0 if auto_rotate else 1, "ON" if auto_rotate else "OFF",
                            "off" if auto_rotate else "on", THEME.upper()))
     return Response(request, body, content_type="text/html")
@@ -2409,6 +3711,30 @@ def theme_page(request: Request):
              ' &nbsp; <a href="/theme?name=default" style="background:#444">Use settings.toml</a>'
              ' &nbsp; <a href="/" style="background:#444">Back</a>')
     return Response(request, PAGE.replace("Zerodha login", "Look") % (msg, links),
+                    content_type="text/html")
+
+
+@server.route("/pet")
+def pet_page(request: Request):
+    if request.query_params.get("feed", safe=False) == "1":
+        pet_screen.feed(time.monotonic())
+        msg = "Fed %s. Yum!" % PET_NAME
+    else:
+        h = pet_screen.hours_hungry()
+        msg = ("%s hasn't been fed yet." % PET_NAME if not pet_screen.born else
+               "%s was fed %s ago (%d meals so far)." % (PET_NAME, _ago(h * 3600), pet_screen.meals))
+    return Response(request, PAGE.replace("Zerodha login", PET_NAME) %
+                    (msg, '<a href="/pet?feed=1">Feed %s</a> &nbsp; <a href="/" '
+                          'style="background:#444">Back</a>' % PET_NAME),
+                    content_type="text/html")
+
+
+@server.route("/stat/debug")
+def stat_debug(request: Request):
+    p = stat_screen.player()
+    return Response(request, PAGE.replace("Zerodha login", "Stat of the day") %
+                    ("Player: %s" % (esc(p[1]) if p else "none set"),
+                     "<pre style='white-space:pre-wrap'>%s</pre>" % esc(stat_screen.debug)),
                     content_type="text/html")
 
 
@@ -2595,6 +3921,8 @@ while True:
             last_weather = last_air = last_ntp = last_kite = last_cric = last_pick = -1e6
             last_fmp_in = last_fmp_us = last_news = -1e6
             last_cdetail = 0.0
+            for _s in EXTRA_LIST:
+                _s.refresh()
 
         if now_m - last_weather > WEATHER_EVERY:
             last_weather = now_m
@@ -2652,6 +3980,10 @@ while True:
             last_news = now_m
             safe(get_news, "news")
 
+        # the extra screens refresh their own data (stats, trivia, pings...)
+        for _s in EXTRA_LIST:
+            _s.tick(now_m)
+
         # handle a few queued connections per pass (browsers open several at once)
         for _ in range(4):
             try:
@@ -2671,8 +4003,8 @@ while True:
             set_brightness(NIGHT_BRIGHT if night else DAY_BRIGHT)
             if night:
                 screen = ORDER.index("clock") if "clock" in ORDER else screen
-                display.root_group = clock_grp
-                showing = "clock"
+                showing = night_name(t)
+                display.root_group = ALL_SCREENS[showing]
             else:                       # morning: back to the normal rotation
                 display.root_group = ALL_SCREENS[ORDER[screen]]
                 showing = ORDER[screen]
@@ -2684,13 +4016,16 @@ while True:
         btn_was = not pressed
         if switch:
             wake_until = now_m + 60
+        boot_down = boot is not None and not boot.value
+        boot_press = boot_down and boot_was
+        boot_was = not boot_down
+        if boot_press and showing in EXTRA:             # BOOT: the screen's own action
+            EXTRA[showing].boot(now_m)
         # news: next headline every NEWS_SECONDS (or on the BOOT button); with auto-rotate on,
         # the news screen moves on after NEWS_PER_VISIT headlines instead of SCREEN_SECONDS
         news_done = False
         if showing == "news":
-            boot_down = boot is not None and not boot.value
-            skip = boot_down and boot_was
-            boot_was = not boot_down
+            skip = boot_press
             if skip or now_m - last_npage > NEWS_SECONDS:
                 last_npage = now_m
                 news_page += 1
@@ -2702,13 +4037,15 @@ while True:
         if showing == "news":
             auto = auto_rotate and news_done
         else:
-            auto = auto_rotate and now_m - last_switch > SCREEN_SECONDS
+            dwell = EXTRA[showing].dwell if showing in EXTRA else None
+            auto = auto_rotate and now_m - last_switch > (dwell or SCREEN_SECONDS)
         if night_now and not switch:
             auto = False
-            if now_m > wake_until:            # not woken by the button: stay on the clock
-                if display.root_group is not clock_grp:
-                    display.root_group = clock_grp
-                showing = "clock"
+            if now_m > wake_until:            # not woken by the button: the night screen
+                nname = night_name(t)
+                if display.root_group is not ALL_SCREENS[nname]:
+                    display.root_group = ALL_SCREENS[nname]
+                showing = nname
         if switch or auto:
             last_switch = now_m
             was_showing = None            # (re)entering a screen restarts its news count
@@ -2721,6 +4058,8 @@ while True:
                     continue
                 if name == "markets" and not FMP_KEY:
                     continue
+                if name in EXTRA and EXTRA[name].skip():
+                    continue
                 break
             display.root_group = ALL_SCREENS[ORDER[screen]]
             showing = ORDER[screen]
@@ -2728,6 +4067,8 @@ while True:
             news_left = min(NEWS_PER_VISIT, max(1, len(news_items)))
             last_npage = now_m
             show_news()
+        if showing in EXTRA and was_showing != showing:
+            EXTRA[showing].enter(now_m)
         was_showing = showing
 
         if t.tm_sec != last_sec:
@@ -2739,6 +4080,8 @@ while True:
             lbl_mclock.text = hhmm
             lbl_nclock.text = hhmm
             th_second()
+            for _s in EXTRA_LIST:
+                _s.second(hhmm)
             if t.tm_min != last_min:
                 last_min = t.tm_min
                 clock_minute(t)
@@ -2752,6 +4095,8 @@ while True:
         if tk:
             tk.step()
         th_frame(showing)
+        if showing in EXTRA:
+            EXTRA[showing].frame(now_m)
         if reboot_at and now_m > reboot_at:          # theme changed on the web page
             microcontroller.reset()
         time.sleep(0.03)
