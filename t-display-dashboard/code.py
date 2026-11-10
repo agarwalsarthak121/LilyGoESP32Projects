@@ -25,7 +25,7 @@
 #   NIGHT_SCREEN="clock"  (or "matrix", "fire", "stars", "cycle" = a different one each hour)
 #   STAT_PLAYERS="253802:Virat Kohli,625383:Jasprit Bumrah:bowl"  (Cricinfo id:name[:bowl])
 #   STAT_CLASS="11"       (11 all internationals, 1 Tests, 2 ODIs, 3 T20Is)
-#   TRIVIA_SECONDS="30"   TRIVIA_CATEGORY="9" (Open Trivia DB category id, optional)
+#   TRIVIA_SECONDS="30"   TRIVIA_SOURCE="india" (or "world" = Open Trivia DB, "mix")
 #   PET_NAME="Moong"      PING_HOST="1.1.1.1"
 #   WATCHDOG="off"        (turn off the hang watchdog, e.g. while debugging over the REPL)
 #   NIGHT_HOURS="23-7"    (dark, dim clock only at night; "" turns night mode off)
@@ -1860,10 +1860,14 @@ EXTRA["net"] = net_screen
 
 # ------------------------------------------------------------- trivia
 # A multiple-choice question; the answer lights up after TRIVIA_SECONDS. BOOT reveals it
-# early, then moves on. Questions: Open Trivia DB (free). Offline: a built-in set.
+# early, then moves on. Questions come from trivia_india.txt on the board (about 240 India
+# questions - add your own lines). TRIVIA_SOURCE="world" uses Open Trivia DB instead,
+# "mix" alternates the two.
 TRIVIA_SECONDS = max(5, int(os.getenv("TRIVIA_SECONDS") or "30"))
 TRIVIA_REVEAL = 8
-TRIVIA_CATEGORY = os.getenv("TRIVIA_CATEGORY") or ""     # e.g. "9" general, "17" science, "23" history
+TRIVIA_SOURCE = (os.getenv("TRIVIA_SOURCE") or "india").strip().lower()
+TRIVIA_FILE = os.getenv("TRIVIA_FILE") or "/trivia_india.txt"
+TRIVIA_CATEGORY = os.getenv("TRIVIA_CATEGORY") or ""     # Open Trivia DB id, for "world"/"mix"
 TRIVIA_FALLBACK = (
     ("Which planet is known as the Red Planet?", "Mars", "Venus", "Jupiter", "Mercury"),
     ("What is the capital of Australia?", "Canberra", "Sydney", "Melbourne", "Perth"),
@@ -1885,6 +1889,23 @@ TRIVIA_FALLBACK = (
     ("How many bits are in a byte?", "8", "4", "16", "10"),
     ("Which city is called the Pink City of India?", "Jaipur", "Udaipur", "Jodhpur", "Bhopal"),
 )
+
+
+def load_trivia(path):
+    """CATEGORY|Question|Right|Wrong|Wrong|Wrong lines -> [(question, options, category)]."""
+    out = []
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                p = [x.strip() for x in line.split("|")]
+                if len(p) == 6 and all(p):
+                    out.append((p[1], p[2:], p[0]))
+    except OSError as e:
+        print("trivia file:", repr(e))
+    return out
 
 
 class TriviaScreen(Screen):
@@ -1909,8 +1930,14 @@ class TriviaScreen(Screen):
             letter = text(F_TITLE, "ABCD"[i], x + 8, y + 4, 0xFFB020)
             med = text(F_MED, "", x + 26, y + 5, 0xE6EAEE)
             small = text(F_SMALL, "", x + 26, y + 8, 0xE6EAEE)
-            self.cells.append((box, letter, med, small))
+            small.line_spacing = 1.0
+            self.cells.append((box, letter, med, small, x, y))
         self.queue = []
+        self.bank = load_trivia(TRIVIA_FILE) if TRIVIA_SOURCE != "world" else []
+        if not self.bank and TRIVIA_SOURCE != "world":
+            self.bank = [(f[0], list(f[1:]), "INDIA") for f in TRIVIA_FALLBACK]
+        self.deck = []
+        self.turn = 0
         self.q = None
         self.t0 = 0.0
         self.revealed = False
@@ -1919,6 +1946,8 @@ class TriviaScreen(Screen):
         self.fallback_i = random.randint(0, len(TRIVIA_FALLBACK) - 1)
 
     def tick(self, now):
+        if TRIVIA_SOURCE == "india":
+            return
         if len(self.queue) < 3 and now - self.last_fetch > 60 and net_state == "ok":
             self.last_fetch = now
             safe(self.fetch, "trivia")
@@ -1943,16 +1972,24 @@ class TriviaScreen(Screen):
                                it.get("difficulty", "")))
 
     def next(self, now):
-        if self.queue:
+        self.turn += 1
+        use_bank = self.bank and (TRIVIA_SOURCE == "india" or not self.queue or
+                                  (TRIVIA_SOURCE == "mix" and self.turn % 2))
+        if use_bank:
+            if not self.deck:                        # a fresh shuffled pass through the file
+                self.deck = _shuffle(list(range(len(self.bank))))
+            q, opts, cat = self.bank[self.deck.pop()]
+            diff = ""
+        elif self.queue:
             q, opts, cat, diff = self.queue.pop(0)
         else:                                        # offline: the built-in questions
             f = TRIVIA_FALLBACK[self.fallback_i % len(TRIVIA_FALLBACK)]
             self.fallback_i += 1
-            q, opts, cat, diff = f[0], list(f[1:]), "General", ""
+            q, opts, cat, diff = f[0], list(f[1:]), "India", ""
         right = opts[0]
         opts = _shuffle(list(opts))
         self.q = (q, opts, opts.index(right))
-        self.sub.text = ("%s %s" % (cat.split(":")[-1].strip(), diff)).upper()[:26]
+        self.sub.text = ("%s %s" % (cat.split(":")[-1].strip(), diff)).strip().upper()[:26]
         rows, fits = wrap_px(F_MED, q, 306, 4)
         if fits:
             for i, lbl in enumerate(self.q_med):
@@ -1965,14 +2002,17 @@ class TriviaScreen(Screen):
                 lbl.text = rows[i] if i < len(rows) else ""
             for lbl in self.q_med:
                 lbl.text = ""
-        for i, (box, letter, med, small) in enumerate(self.cells):
+        for i, (box, letter, med, small, x, y) in enumerate(self.cells):
             o = opts[i]
             box.fill = 0x1C2128
             letter.color = 0xFFB020
             if px_width(F_MED, o) <= 124:
                 med.text, small.text = o, ""
-            else:
-                med.text, small.text = "", (o if len(o) <= 21 else o[:20] + ".")
+            else:                                    # long answer: two lines of small text
+                rows, _ = wrap_px(F_SMALL, o, 124, 2)
+                med.text = ""
+                small.text = "\n".join(rows)
+                small.anchored_position = (x + 26, y + (2 if len(rows) > 1 else 8))
             med.color = small.color = 0xE6EAEE
         self.t0 = now
         self.revealed = False
@@ -1983,7 +2023,7 @@ class TriviaScreen(Screen):
         self.t0 = now
         self.bar.width = 312
         self.bar_pal[0] = 0x1E9E50
-        for i, (box, letter, med, small) in enumerate(self.cells):
+        for i, (box, letter, med, small, x, y) in enumerate(self.cells):
             if i == self.q[2]:
                 box.fill = 0x1E9E50
                 letter.color = med.color = small.color = WHITE

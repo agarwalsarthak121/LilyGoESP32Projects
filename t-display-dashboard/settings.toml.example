@@ -51,7 +51,8 @@ FMP_API_KEY = ""
 # STAT_PLAYERS = "253802:Virat Kohli,34102:Rohit Sharma,625383:Jasprit Bumrah:bowl,1070173:Shubman Gill"
 # STAT_CLASS = "11"           # 11 all internationals, 1 Tests, 2 ODIs, 3 T20Is
 # TRIVIA_SECONDS = "30"
-# TRIVIA_CATEGORY = ""        # Open Trivia DB id: 9 general, 17 science, 21 sports, 22 geography, 23 history
+# TRIVIA_SOURCE = "india"     # questions from trivia_india.txt; "world" = Open Trivia DB, "mix" = both
+# TRIVIA_CATEGORY = ""        # only for "world"/"mix": 9 general, 17 science, 21 sports, 23 history
 # PET_NAME = "Moong"
 # PING_HOST = "1.1.1.1"
 

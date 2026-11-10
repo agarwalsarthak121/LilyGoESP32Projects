@@ -4,6 +4,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 BOARD = os.path.join(HERE, "..", "..", "t-display-dashboard")
 sys.path.insert(0, os.path.join(BOARD, "lib"))
 
+os.environ.setdefault("TRIVIA_FILE", BOARD + "/trivia_india.txt")
 
 from blinka_displayio_pygamedisplay import PyGameDisplay
 import pygame

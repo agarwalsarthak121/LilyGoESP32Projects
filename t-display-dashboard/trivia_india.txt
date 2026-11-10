@@ -1,0 +1,255 @@
+# India trivia for the T-Display dashboard.
+# One question per line:  CATEGORY|Question|Right answer|Wrong 1|Wrong 2|Wrong 3
+# Add your own lines in the same format; lines starting with # are ignored.
+# Plain ASCII only (the screen fonts have no accented letters).
+
+HISTORY|Who was the first Prime Minister of India?|Jawaharlal Nehru|Sardar Patel|Rajendra Prasad|Lal Bahadur Shastri
+HISTORY|On which date did the Constitution of India come into force?|26 January 1950|15 August 1947|26 November 1949|2 October 1950
+HISTORY|Who was the first President of India?|Rajendra Prasad|S. Radhakrishnan|Zakir Husain|V. V. Giri
+HISTORY|Which Mughal emperor built the Taj Mahal?|Shah Jahan|Akbar|Jahangir|Aurangzeb
+HISTORY|The Battle of Plassey was fought in which year?|1757|1764|1857|1707
+HISTORY|Who founded the Maurya Empire?|Chandragupta Maurya|Ashoka|Bindusara|Bimbisara
+HISTORY|Which movement did Gandhi launch in August 1942?|Quit India|Non-Cooperation|Civil Disobedience|Khilafat
+HISTORY|The Dandi March of 1930 protested a tax on what?|Salt|Indigo|Cotton|Tea
+HISTORY|Who is known as the 'Iron Man of India'?|Sardar Patel|Bhagat Singh|Subhas Chandra Bose|Bal Gangadhar Tilak
+HISTORY|Who said 'Swaraj is my birthright and I shall have it'?|Bal Gangadhar Tilak|Lala Lajpat Rai|Gopal Krishna Gokhale|Bipin Chandra Pal
+HISTORY|Who formed the Azad Hind government in 1943?|Subhas Chandra Bose|Rash Behari Bose|Mohan Singh|Bhagat Singh
+HISTORY|In which city did the Jallianwala Bagh massacre take place?|Amritsar|Lahore|Ludhiana|Jalandhar
+HISTORY|In which year did the Jallianwala Bagh massacre happen?|1919|1909|1929|1931
+HISTORY|Who was the first Mughal emperor?|Babur|Humayun|Akbar|Sher Shah Suri
+HISTORY|The First Battle of Panipat was fought in which year?|1526|1556|1761|1576
+HISTORY|Nalanda, a great ancient centre of Buddhist learning, is in which state?|Bihar|Uttar Pradesh|Odisha|Madhya Pradesh
+HISTORY|Who wrote the 'Arthashastra'?|Chanakya|Kalidasa|Banabhatta|Megasthenes
+HISTORY|Which Maratha ruler was crowned Chhatrapati at Raigad in 1674?|Shivaji|Sambhaji|Baji Rao I|Shahu
+HISTORY|Who was the last Mughal emperor?|Bahadur Shah Zafar|Aurangzeb|Shah Alam II|Akbar II
+HISTORY|The Revolt of 1857 began in which town?|Meerut|Delhi|Kanpur|Lucknow
+HISTORY|Who was India's first woman Prime Minister?|Indira Gandhi|Pratibha Patil|Sucheta Kriplani|Sarojini Naidu
+HISTORY|Who was India's first woman President?|Pratibha Patil|Indira Gandhi|Droupadi Murmu|Sarojini Naidu
+HISTORY|Who was the only Indian Governor-General of India?|C. Rajagopalachari|Rajendra Prasad|Sardar Patel|B. R. Ambedkar
+HISTORY|Which emperor embraced Buddhism after the Kalinga war?|Ashoka|Chandragupta Maurya|Harsha|Kanishka
+HISTORY|Hampi was the capital of which empire?|Vijayanagara|Chola|Maratha|Bahmani
+HISTORY|Which dynasty built the Brihadeeswarar Temple in Thanjavur?|Chola|Pallava|Pandya|Chalukya
+HISTORY|Who founded Sikhism?|Guru Nanak|Guru Gobind Singh|Guru Arjan Dev|Guru Tegh Bahadur
+HISTORY|Who is known as the father of the Indian Constitution?|B. R. Ambedkar|Jawaharlal Nehru|Rajendra Prasad|B. N. Rau
+HISTORY|Who was the first Indian to win a Nobel Prize?|Rabindranath Tagore|C. V. Raman|Mother Teresa|Amartya Sen
+HISTORY|In which year did Gandhi return to India from South Africa?|1915|1910|1920|1905
+HISTORY|Where was the first session of the Indian National Congress held in 1885?|Bombay|Calcutta|Madras|Pune
+HISTORY|Which Governor-General introduced the 'Doctrine of Lapse'?|Lord Dalhousie|Lord Curzon|Lord Wellesley|Lord Cornwallis
+HISTORY|Which Viceroy ordered the partition of Bengal in 1905?|Lord Curzon|Lord Minto|Lord Ripon|Lord Dalhousie
+HISTORY|Who was hanged along with Rajguru and Sukhdev in 1931?|Bhagat Singh|Chandrashekhar Azad|Ram Prasad Bismil|Ashfaqulla Khan
+HISTORY|Which Mughal emperor started the 'Din-i Ilahi'?|Akbar|Humayun|Jahangir|Shah Jahan
+
+GEOGRAPHY|Which is the largest state of India by area?|Rajasthan|Madhya Pradesh|Maharashtra|Uttar Pradesh
+GEOGRAPHY|Which is the smallest state of India by area?|Goa|Sikkim|Tripura|Mizoram
+GEOGRAPHY|Which is the most populous state of India?|Uttar Pradesh|Maharashtra|Bihar|West Bengal
+GEOGRAPHY|Kangchenjunga lies on India's border with which country?|Nepal|Bhutan|China|Myanmar
+GEOGRAPHY|Which river is known as the 'Sorrow of Bihar'?|Kosi|Gandak|Son|Ganga
+GEOGRAPHY|What is the southernmost tip of mainland India?|Kanyakumari|Rameswaram|Indira Point|Thiruvananthapuram
+GEOGRAPHY|Which state has the longest coastline in India?|Gujarat|Andhra Pradesh|Tamil Nadu|Maharashtra
+GEOGRAPHY|The Thar Desert lies mostly in which state?|Rajasthan|Gujarat|Haryana|Punjab
+GEOGRAPHY|Which is India's largest brackish-water lagoon?|Chilika|Pulicat|Vembanad|Sambhar
+GEOGRAPHY|Lonar crater lake is in which state?|Maharashtra|Madhya Pradesh|Karnataka|Telangana
+GEOGRAPHY|Which river flows past the Taj Mahal in Agra?|Yamuna|Ganga|Chambal|Betwa
+GEOGRAPHY|Majuli, one of the world's largest river islands, is on which river?|Brahmaputra|Ganga|Godavari|Mahanadi
+GEOGRAPHY|Which state is called the 'Land of Five Rivers'?|Punjab|Haryana|Uttar Pradesh|Bihar
+GEOGRAPHY|Which city is called the 'Silicon Valley of India'?|Bengaluru|Hyderabad|Pune|Chennai
+GEOGRAPHY|What is the capital of Arunachal Pradesh?|Itanagar|Aizawl|Kohima|Imphal
+GEOGRAPHY|What is the capital of Mizoram?|Aizawl|Shillong|Agartala|Kohima
+GEOGRAPHY|What is the capital of Meghalaya?|Shillong|Guwahati|Agartala|Itanagar
+GEOGRAPHY|What is the capital of Chhattisgarh?|Raipur|Bilaspur|Durg|Ranchi
+GEOGRAPHY|What is the capital of Jharkhand?|Ranchi|Jamshedpur|Dhanbad|Patna
+GEOGRAPHY|What is the capital of Odisha?|Bhubaneswar|Cuttack|Puri|Rourkela
+GEOGRAPHY|What is the capital of Kerala?|Thiruvananthapuram|Kochi|Kozhikode|Thrissur
+GEOGRAPHY|What is the capital of Telangana?|Hyderabad|Warangal|Amaravati|Vijayawada
+GEOGRAPHY|What is the capital of Sikkim?|Gangtok|Darjeeling|Namchi|Pelling
+GEOGRAPHY|The Western Ghats are also known as the?|Sahyadri|Aravalli|Satpura|Vindhya
+GEOGRAPHY|Which is the oldest mountain range in India?|Aravalli|Himalaya|Western Ghats|Satpura
+GEOGRAPHY|Which river is called the 'Dakshin Ganga'?|Godavari|Krishna|Kaveri|Narmada
+GEOGRAPHY|Which river flows west through a rift valley into the Arabian Sea?|Narmada|Godavari|Mahanadi|Krishna
+GEOGRAPHY|Cherrapunji (Sohra), famous for its rainfall, is in which state?|Meghalaya|Assam|Sikkim|Arunachal Pradesh
+GEOGRAPHY|Kaziranga National Park is famous for which animal?|One-horned rhino|Asiatic lion|Snow leopard|Red panda
+GEOGRAPHY|Gir National Park is the home of which animal?|Asiatic lion|Bengal tiger|One-horned rhino|Snow leopard
+GEOGRAPHY|The Indian part of the Sundarbans is in which state?|West Bengal|Odisha|Assam|Andhra Pradesh
+GEOGRAPHY|Which strait separates India and Sri Lanka?|Palk Strait|Strait of Malacca|Ten Degree Channel|Strait of Hormuz
+GEOGRAPHY|Sri Vijaya Puram (formerly Port Blair) is the capital of?|Andaman and Nicobar|Lakshadweep|Puducherry|Daman and Diu
+GEOGRAPHY|Which union territory is a group of coral islands in the Arabian Sea?|Lakshadweep|Andaman and Nicobar|Puducherry|Daman and Diu
+GEOGRAPHY|Which river forms the western boundary of Bijnor district?|Ganga|Yamuna|Ramganga|Gomti
+GEOGRAPHY|Which is India's largest freshwater lake?|Wular|Dal|Loktak|Chilika
+GEOGRAPHY|The Rann of Kutch is in which state?|Gujarat|Rajasthan|Maharashtra|Madhya Pradesh
+GEOGRAPHY|Loktak Lake, with its floating islands, is in which state?|Manipur|Mizoram|Assam|Tripura
+
+POLITY|How many Fundamental Duties are in the Indian Constitution?|11|10|6|12
+POLITY|What is the minimum age to become President of India?|35|25|30|40
+POLITY|What is the minimum age to contest a Lok Sabha election?|25|18|21|30
+POLITY|Who is the ex-officio Chairman of the Rajya Sabha?|Vice President|President|Prime Minister|Lok Sabha Speaker
+POLITY|How long is the normal term of the Lok Sabha?|5 years|4 years|6 years|3 years
+POLITY|For how many years is a Rajya Sabha member elected?|6|5|4|3
+POLITY|Which Article of the Constitution abolishes untouchability?|Article 17|Article 14|Article 21|Article 32
+POLITY|Which Article protects the right to life and personal liberty?|Article 21|Article 19|Article 14|Article 32
+POLITY|Who appoints the Chief Justice of India?|President|Prime Minister|Parliament|Law Minister
+POLITY|Who wrote the national song 'Vande Mataram'?|Bankim Chandra Chatterjee|Rabindranath Tagore|Sarojini Naidu|Subramania Bharati
+POLITY|How many spokes does the Ashoka Chakra on the flag have?|24|12|16|32
+POLITY|What is India's national animal?|Bengal tiger|Asiatic lion|Elephant|Peacock
+POLITY|What is India's national bird?|Peacock|Parrot|Eagle|Sarus crane
+POLITY|What is India's national aquatic animal?|Ganges river dolphin|Olive ridley turtle|Gharial|Dugong
+POLITY|'Satyameva Jayate' is taken from which text?|Mundaka Upanishad|Rigveda|Bhagavad Gita|Ramayana
+POLITY|The national emblem is adapted from the Lion Capital at?|Sarnath|Sanchi|Bodh Gaya|Kushinagar
+POLITY|Who composed the national anthem 'Jana Gana Mana'?|Rabindranath Tagore|Bankim Chandra Chatterjee|Muhammad Iqbal|Sarojini Naidu
+CULTURE|Who wrote 'Saare Jahan Se Achha'?|Muhammad Iqbal|Rabindranath Tagore|Faiz Ahmed Faiz|Mirza Ghalib
+
+SCIENCE|Who was the first Indian to travel to space?|Rakesh Sharma|Kalpana Chawla|Sunita Williams|Shubhanshu Shukla
+SCIENCE|What was India's first satellite?|Aryabhata|Bhaskara|Rohini|INSAT-1A
+SCIENCE|Chandrayaan-3 landed near which region of the Moon?|South pole|North pole|Equator|Far side
+SCIENCE|On which date did Chandrayaan-3 land on the Moon?|23 August 2023|14 July 2023|15 August 2023|22 July 2019
+SCIENCE|What was the name of Chandrayaan-3's lander?|Vikram|Pragyan|Aryabhata|Kalam
+SCIENCE|What was the name of Chandrayaan-3's rover?|Pragyan|Vikram|Shakti|Mangal
+SCIENCE|India's Mars Orbiter Mission is better known as?|Mangalyaan|Chandrayaan|Gaganyaan|Aditya
+SCIENCE|Aditya-L1 was launched to study what?|The Sun|Mars|The Moon|Venus
+SCIENCE|ISRO's Satish Dhawan Space Centre is at?|Sriharikota|Thumba|Chandipur|Balasore
+SCIENCE|Who is called the father of the Indian space programme?|Vikram Sarabhai|A. P. J. Abdul Kalam|Homi J. Bhabha|Satish Dhawan
+SCIENCE|Who is called the father of India's nuclear programme?|Homi J. Bhabha|Vikram Sarabhai|C. V. Raman|Meghnad Saha
+SCIENCE|C. V. Raman won the Nobel Prize for work on what?|Scattering of light|Radioactivity|X-rays|Superconductivity
+SCIENCE|Which mathematician is linked to 1729, the 'taxicab number'?|Srinivasa Ramanujan|Aryabhata|Brahmagupta|C. R. Rao
+SCIENCE|Which ancient mathematician gave rules for using zero as a number?|Brahmagupta|Aryabhata|Bhaskara II|Varahamihira
+SCIENCE|What was the codename of India's first nuclear test in 1974?|Smiling Buddha|Operation Shakti|Operation Vijay|Operation Meghdoot
+SCIENCE|Pokhran, the site of India's nuclear tests, is in which state?|Rajasthan|Gujarat|Madhya Pradesh|Punjab
+SCIENCE|Who is called the 'Missile Man of India'?|A. P. J. Abdul Kalam|Vikram Sarabhai|Satish Dhawan|K. Sivan
+SCIENCE|What is India's own satellite navigation system called?|NavIC|GPS|GLONASS|Galileo
+SCIENCE|What is India's human spaceflight programme called?|Gaganyaan|Mangalyaan|Chandrayaan|Shukrayaan
+SCIENCE|Bose-Einstein statistics are named after which Indian physicist?|Satyendra Nath Bose|Jagadish Chandra Bose|C. V. Raman|Meghnad Saha
+SCIENCE|J. C. Bose measured plant growth with which instrument?|Crescograph|Spectrograph|Seismograph|Barograph
+SCIENCE|Who was the first India-born woman in space?|Kalpana Chawla|Sunita Williams|Tessy Thomas|Ritu Karidhal
+SCIENCE|What is India's first home-built aircraft carrier?|INS Vikrant|INS Vikramaditya|INS Viraat|INS Arihant
+SCIENCE|UPI, India's instant payment system, launched in which year?|2016|2014|2018|2012
+
+SPORTS|Who captained India to the 1983 Cricket World Cup win?|Kapil Dev|Sunil Gavaskar|Mohinder Amarnath|Ravi Shastri
+SPORTS|Who was Player of the Match in the 1983 World Cup final?|Mohinder Amarnath|Kapil Dev|Madan Lal|Roger Binny
+SPORTS|Who scored the first double century in men's ODIs?|Sachin Tendulkar|Virender Sehwag|Rohit Sharma|Sourav Ganguly
+SPORTS|Which Indian bowler took all 10 wickets in a Test innings?|Anil Kumble|Harbhajan Singh|Kapil Dev|Javagal Srinath
+SPORTS|Who won India's first individual Olympic gold medal?|Abhinav Bindra|Neeraj Chopra|Rajyavardhan Rathore|Leander Paes
+SPORTS|Neeraj Chopra won Olympic gold in Tokyo in which event?|Javelin throw|Shot put|Discus throw|Long jump
+SPORTS|Who was the first Indian woman to win an Olympic medal?|Karnam Malleswari|P. T. Usha|Saina Nehwal|Mary Kom
+SPORTS|P. V. Sindhu plays which sport?|Badminton|Tennis|Squash|Table tennis
+SPORTS|Mary Kom is a world champion in which sport?|Boxing|Wrestling|Weightlifting|Judo
+SPORTS|Which Indian hockey legend is called 'The Wizard'?|Dhyan Chand|Balbir Singh Sr.|Dhanraj Pillay|Pargat Singh
+SPORTS|National Sports Day (29 August) marks whose birthday?|Dhyan Chand|Milkha Singh|Sachin Tendulkar|P. T. Usha
+SPORTS|Who is known as 'The Flying Sikh'?|Milkha Singh|Kapil Dev|Balbir Singh|Harbhajan Singh
+SPORTS|Viswanathan Anand is a world champion in which game?|Chess|Carrom|Billiards|Badminton
+SPORTS|Who became the youngest-ever World Chess Champion in 2024?|D. Gukesh|R. Praggnanandhaa|Arjun Erigaisi|Viswanathan Anand
+SPORTS|Who captained India to the 2011 Cricket World Cup win?|MS Dhoni|Virat Kohli|Sachin Tendulkar|Gautam Gambhir
+SPORTS|Who captained India to the 2024 T20 World Cup title?|Rohit Sharma|Virat Kohli|Hardik Pandya|Suryakumar Yadav
+SPORTS|Which team won the first IPL season in 2008?|Rajasthan Royals|Chennai Super Kings|Mumbai Indians|Deccan Chargers
+SPORTS|Which is the largest cricket stadium in the world?|Narendra Modi Stadium|Eden Gardens|Melbourne Cricket Ground|Wankhede Stadium
+SPORTS|How many international centuries did Sachin Tendulkar score?|100|99|90|101
+SPORTS|The Ranji Trophy is contested in which sport?|Cricket|Football|Hockey|Kabaddi
+SPORTS|The Durand Cup is associated with which sport?|Football|Hockey|Cricket|Polo
+SPORTS|Pankaj Advani is a many-time world champion in?|Billiards and snooker|Squash|Table tennis|Golf
+SPORTS|Which Indian wrestler won silver at the 2012 London Olympics?|Sushil Kumar|Yogeshwar Dutt|Bajrang Punia|Ravi Kumar Dahiya
+SPORTS|In which year did the Pro Kabaddi League begin?|2014|2012|2016|2010
+SPORTS|Who was the first Indian to win a Grand Slam tennis title?|Mahesh Bhupathi|Leander Paes|Sania Mirza|Vijay Amritraj
+SPORTS|In which year did India win the men's Hockey World Cup?|1975|1971|1982|1980
+SPORTS|How many Olympic gold medals has India won in men's hockey?|8|6|7|10
+SPORTS|Which Indian has scored two Test triple centuries?|Virender Sehwag|Karun Nair|Rahul Dravid|VVS Laxman
+SPORTS|Which Indian cricketer is nicknamed 'The Wall'?|Rahul Dravid|Sourav Ganguly|VVS Laxman|Cheteshwar Pujara
+SPORTS|Who was India's first Test captain?|C. K. Nayudu|Lala Amarnath|Vijay Hazare|Nawab of Pataudi
+SPORTS|Where did India play its first Test match in 1932?|Lord's|The Oval|Eden Gardens|Bombay Gymkhana
+SPORTS|Which athlete is called the 'Payyoli Express'?|P. T. Usha|Anju Bobby George|Hima Das|Dutee Chand
+SPORTS|Anju Bobby George won a 2003 World Championships medal in?|Long jump|High jump|Javelin|400 m
+SPORTS|Who hit six sixes in an over at the 2007 T20 World Cup?|Yuvraj Singh|MS Dhoni|Yusuf Pathan|Virender Sehwag
+SPORTS|Rohit Sharma's 264 is a record for the highest score in?|ODIs|Tests|T20Is|IPL
+
+CULTURE|Kathakali is a classical dance from which state?|Kerala|Tamil Nadu|Karnataka|Andhra Pradesh
+CULTURE|Bharatanatyam originated in which state?|Tamil Nadu|Kerala|Odisha|Andhra Pradesh
+CULTURE|Kuchipudi is a classical dance from which state?|Andhra Pradesh|Karnataka|Kerala|Odisha
+CULTURE|Bihu is the main festival of which state?|Assam|Bihar|West Bengal|Odisha
+CULTURE|Onam is celebrated mainly in which state?|Kerala|Karnataka|Tamil Nadu|Goa
+CULTURE|Pongal is a harvest festival of which state?|Tamil Nadu|Kerala|Punjab|Gujarat
+CULTURE|Lohri is mainly celebrated in which state?|Punjab|Assam|Kerala|Odisha
+CULTURE|The Hornbill Festival is held in which state?|Nagaland|Manipur|Mizoram|Meghalaya
+CULTURE|Who wrote the 'Ramcharitmanas'?|Tulsidas|Valmiki|Surdas|Kabir
+CULTURE|The Mahabharata is traditionally credited to which sage?|Ved Vyasa|Valmiki|Vishwamitra|Agastya
+CULTURE|Who wrote 'Abhijnanashakuntalam'?|Kalidasa|Bhasa|Banabhatta|Tulsidas
+CULTURE|Which sitar maestro received the Bharat Ratna in 1999?|Ravi Shankar|Vilayat Khan|Nikhil Banerjee|Shahid Parvez
+CULTURE|Ustad Bismillah Khan was a master of which instrument?|Shehnai|Sarod|Santoor|Flute
+CULTURE|Pandit Hariprasad Chaurasia plays which instrument?|Bansuri|Sitar|Tabla|Santoor
+CULTURE|Pandit Shivkumar Sharma was famous for which instrument?|Santoor|Sarangi|Sitar|Veena
+CULTURE|Madhubani painting comes from which state?|Bihar|Odisha|Rajasthan|West Bengal
+CULTURE|Warli painting is a tribal art from which state?|Maharashtra|Madhya Pradesh|Chhattisgarh|Jharkhand
+CULTURE|The Konark Sun Temple is in which state?|Odisha|Tamil Nadu|Gujarat|Karnataka
+CULTURE|The Ajanta and Ellora caves are in which state?|Maharashtra|Madhya Pradesh|Karnataka|Odisha
+CULTURE|The Khajuraho temples are in which state?|Madhya Pradesh|Uttar Pradesh|Rajasthan|Odisha
+CULTURE|The Golden Temple is in which city?|Amritsar|Patiala|Ludhiana|Chandigarh
+CULTURE|Which city is home to the Charminar?|Hyderabad|Lucknow|Bhopal|Agra
+CULTURE|The Qutub Minar is in which city?|Delhi|Agra|Jaipur|Lucknow
+CULTURE|The Hawa Mahal is in which city?|Jaipur|Udaipur|Jodhpur|Bikaner
+CULTURE|Which city hosts the Kumbh Mela at the Triveni Sangam?|Prayagraj|Haridwar|Ujjain|Nashik
+CULTURE|The Gateway of India is in which city?|Mumbai|Chennai|Kolkata|Kochi
+CULTURE|The Victoria Memorial is in which city?|Kolkata|Mumbai|Chennai|Delhi
+CULTURE|The Meenakshi Temple is in which city?|Madurai|Thanjavur|Chennai|Rameswaram
+CULTURE|Sanchi is famous for its ancient?|Buddhist stupa|Sun temple|Rock-cut caves|Step well
+CULTURE|Rani ki Vav, a stepwell on the Rs 100 note, is in which state?|Gujarat|Rajasthan|Madhya Pradesh|Maharashtra
+
+CINEMA|What was India's first full-length feature film (1913)?|Raja Harishchandra|Alam Ara|Kisan Kanya|Sant Tukaram
+CINEMA|Who is called the father of Indian cinema?|Dadasaheb Phalke|Raj Kapoor|Satyajit Ray|V. Shantaram
+CINEMA|What was India's first talkie film (1931)?|Alam Ara|Raja Harishchandra|Devdas|Mother India
+CINEMA|'Naatu Naatu', which won an Oscar for Best Original Song, is from?|RRR|Baahubali|Pushpa|KGF
+CINEMA|Which composer won two Oscars for 'Slumdog Millionaire'?|A. R. Rahman|Ilaiyaraaja|M. M. Keeravani|Amit Trivedi
+CINEMA|Which Indian director received an honorary Oscar in 1992?|Satyajit Ray|Raj Kapoor|Mrinal Sen|Shyam Benegal
+CINEMA|What was Satyajit Ray's first film?|Pather Panchali|Charulata|Apur Sansar|Nayak
+CINEMA|Which was India's first film nominated for the foreign-language Oscar?|Mother India|Salaam Bombay|Lagaan|Pather Panchali
+CINEMA|'Lagaan' (2001) is built around which sport?|Cricket|Hockey|Kabaddi|Football
+CINEMA|Who directed 'Sholay'?|Ramesh Sippy|Yash Chopra|Manmohan Desai|Prakash Mehra
+CINEMA|What is the name of Amjad Khan's villain in 'Sholay'?|Gabbar Singh|Mogambo|Shakaal|Kancha Cheena
+CINEMA|Which actor was called the 'Tragedy King' of Hindi cinema?|Dilip Kumar|Raj Kapoor|Dev Anand|Rajesh Khanna
+CINEMA|Who sang 'Ae Mere Watan Ke Logon'?|Lata Mangeshkar|Asha Bhosle|Mohammed Rafi|Kishore Kumar
+CINEMA|In 'Mughal-e-Azam', Prince Salim falls in love with?|Anarkali|Jodha|Mumtaz|Noor Jahan
+CINEMA|Which films are set in the kingdom of Mahishmati?|Baahubali|RRR|Ponniyin Selvan|KGF
+CINEMA|Which was the first Indian film to gross over Rs 1,000 crore?|Baahubali 2|Dangal|PK|Pathaan
+CINEMA|The line 'Mere paas maa hai' is from which film?|Deewaar|Sholay|Zanjeer|Trishul
+CINEMA|Who played the lead in 'Mother India' (1957)?|Nargis|Madhubala|Meena Kumari|Waheeda Rehman
+CINEMA|The Dadasaheb Phalke Award honours what?|Lifetime achievement|Best film of the year|Best debut|Best music
+CINEMA|Who played 'Mogambo' in 'Mr. India'?|Amrish Puri|Amjad Khan|Prem Chopra|Pran
+
+FOOD|Dhokla is a famous snack from which state?|Gujarat|Rajasthan|Maharashtra|Madhya Pradesh
+FOOD|Rasgulla has GI tags for West Bengal and which other state?|Odisha|Assam|Bihar|Tripura
+FOOD|Vada pav is the famous street food of which city?|Mumbai|Delhi|Kolkata|Chennai
+FOOD|Litti chokha is a traditional dish of which state?|Bihar|Punjab|Kerala|Gujarat
+FOOD|Darjeeling tea comes from which state?|West Bengal|Assam|Sikkim|Himachal Pradesh
+FOOD|Which state produces the most tea in India?|Assam|West Bengal|Kerala|Tamil Nadu
+FOOD|Which spice is called the 'queen of spices'?|Cardamom|Saffron|Black pepper|Clove
+FOOD|Which spice is called the 'king of spices'?|Black pepper|Cardamom|Turmeric|Saffron
+FOOD|Pampore is famous for growing which spice?|Saffron|Cardamom|Black pepper|Clove
+FOOD|Dal baati churma is a famous dish of which state?|Rajasthan|Gujarat|Bihar|Uttar Pradesh
+FOOD|Appam with stew is typical of which state?|Kerala|Punjab|Rajasthan|West Bengal
+FOOD|Which city is famous for 'petha', a sweet made from ash gourd?|Agra|Mathura|Lucknow|Varanasi
+FOOD|Mysore Pak, the famous sweet, comes from which state?|Karnataka|Tamil Nadu|Kerala|Andhra Pradesh
+FOOD|Which city is famous for its Tunday kebabs?|Lucknow|Hyderabad|Delhi|Bhopal
+
+ECONOMY|Who designed the Indian rupee symbol?|D. Udaya Kumar|Raghuram Rajan|Satish Gujral|M. F. Husain
+ECONOMY|Where is the Reserve Bank of India headquartered?|Mumbai|New Delhi|Kolkata|Chennai
+ECONOMY|In which year was the Reserve Bank of India set up?|1935|1947|1950|1921
+ECONOMY|Which is India's oldest stock exchange?|BSE|NSE|Calcutta Stock Exchange|MCX
+ECONOMY|The NIFTY 50 is the benchmark index of which exchange?|NSE|BSE|MCX|NCDEX
+ECONOMY|How many companies are in the SENSEX?|30|50|100|20
+ECONOMY|In which year did India's economic liberalisation begin?|1991|1984|1999|1980
+ECONOMY|Who presented the 1991 liberalisation budget as Finance Minister?|Manmohan Singh|P. Chidambaram|Pranab Mukherjee|Yashwant Sinha
+ECONOMY|In which year were the old Rs 500 and Rs 1,000 notes withdrawn?|2016|2014|2017|2018
+ECONOMY|In which year was GST introduced in India?|2017|2016|2014|2019
+ECONOMY|The State Bank of India was formerly called the?|Imperial Bank of India|Bank of Bengal|Allahabad Bank|Bank of Hindustan
+ECONOMY|Who founded the Tata Group?|Jamsetji Tata|J. R. D. Tata|Ratan Tata|Dorabji Tata
+ECONOMY|Who started Tata Airlines, which became Air India?|J. R. D. Tata|G. D. Birla|Dhirubhai Ambani|Jamsetji Tata
+ECONOMY|Infosys was founded in 1981 in which city?|Pune|Bengaluru|Mysuru|Hyderabad
+ECONOMY|Amul is a dairy cooperative from which state?|Gujarat|Maharashtra|Punjab|Uttar Pradesh
+ECONOMY|Who is called the father of the White Revolution in India?|Verghese Kurien|M. S. Swaminathan|Sam Pitroda|C. Subramaniam
+ECONOMY|Who is called the father of the Green Revolution in India?|M. S. Swaminathan|Verghese Kurien|Sam Pitroda|Amartya Sen
+
+UTTAR PRADESH|Bijnor district is part of which division of Uttar Pradesh?|Moradabad|Meerut|Bareilly|Saharanpur
+UTTAR PRADESH|What is the capital of Uttar Pradesh?|Lucknow|Prayagraj|Kanpur|Varanasi
+UTTAR PRADESH|Which city is known as 'Peetal Nagri', the Brass City?|Moradabad|Aligarh|Mirzapur|Firozabad
+UTTAR PRADESH|Firozabad is famous for making what?|Glass bangles|Brassware|Locks|Carpets
+UTTAR PRADESH|Aligarh is famous for making what?|Locks|Bangles|Carpets|Brassware
+UTTAR PRADESH|Bhadohi is famous for which craft?|Carpets|Locks|Bangles|Leather goods
+UTTAR PRADESH|Kanpur is best known for which industry?|Leather|Silk|Glass|Carpets
+UTTAR PRADESH|Chikankari embroidery is associated with which city?|Lucknow|Varanasi|Agra|Kanpur
+UTTAR PRADESH|Sarnath, where the Buddha gave his first sermon, is near?|Varanasi|Gorakhpur|Prayagraj|Ayodhya
+UTTAR PRADESH|Fatehpur Sikri was built by which emperor?|Akbar|Babur|Shah Jahan|Humayun
