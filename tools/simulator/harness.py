@@ -235,7 +235,7 @@ class Response:
 hs.Server, hs.Request, hs.Response = Server, Request, Response
 sys.modules["adafruit_httpserver"] = hs
 mc = types.ModuleType("microcontroller"); mc.pin = types.SimpleNamespace(GPIO14="GPIO14", GPIO0="GPIO0")
-mc.nvm = bytearray(b"\xff" * 4096)
+mc.nvm = bytearray(b"\xff" * 8192)
 NVMFILE = os.environ.get("NVMFILE")
 if NVMFILE and os.path.exists(NVMFILE):
     mc.nvm = bytearray(open(NVMFILE, "rb").read())

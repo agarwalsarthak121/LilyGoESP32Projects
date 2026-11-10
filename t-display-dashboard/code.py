@@ -2508,6 +2508,194 @@ pet_screen = PetScreen()
 EXTRA["pet"] = pet_screen
 
 
+# ------------------------------------------------------------- to-do board
+# Tasks you manage at http://<board>:8080/todo, shown on the board. Kept in NVM.
+# Each task: [id, text, done, high priority, due "YYYY-MM-DD" or ""].
+TODO_NVM = 3200
+TODO_ROWS = 5
+TODO_PAGE_SECONDS = 6
+
+
+def _todo_load():
+    try:
+        nv = microcontroller.nvm
+        n = nv[TODO_NVM] | (nv[TODO_NVM + 1] << 8)
+        if 2 <= n <= len(nv) - TODO_NVM - 2:
+            return [list(t) for t in json.loads(bytes(nv[TODO_NVM + 2:TODO_NVM + 2 + n]).decode())]
+    except Exception as e:  # noqa: BLE001
+        print("to-do list unreadable:", repr(e))
+    return []
+
+
+def todo_save(items):
+    b = json.dumps(items).encode()
+    room = len(microcontroller.nvm) - TODO_NVM - 2
+    if len(b) > room:
+        raise ValueError("the list is full (%d of %d bytes) - clear some done tasks" % (len(b), room))
+    microcontroller.nvm[TODO_NVM:TODO_NVM + 2 + len(b)] = bytes([len(b) & 255, len(b) >> 8]) + b
+
+
+def _days_until(due):
+    """Days from today to 'YYYY-MM-DD' (negative = overdue); None if unknown."""
+    try:
+        y, m, d = (int(x) for x in due.split("-"))
+        t = time.localtime()
+        if t.tm_year < 2024:
+            return None
+        a = time.mktime((y, m, d, 12, 0, 0, 0, 0, -1))
+        b = time.mktime((t.tm_year, t.tm_mon, t.tm_mday, 12, 0, 0, 0, 0, -1))
+        return int(round((a - b) / 86400))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+WDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+
+
+def due_label(due):
+    """('Today', colour) style label for a due date."""
+    if not due:
+        return "", 0
+    n = _days_until(due)
+    if n is None:
+        return due[5:], 0x8A9099
+    if n < 0:
+        return ("%dd late" % -n) if n < -1 else "Yesterday", 0xFF5A5A
+    if n == 0:
+        return "Today", 0xFFB020
+    if n == 1:
+        return "Tomorrow", 0xFFD27A
+    if n < 7:
+        y, m, d = (int(x) for x in due.split("-"))
+        return WDAYS[time.localtime(time.mktime((y, m, d, 12, 0, 0, 0, 0, -1))).tm_wday], 0xB8C0C8
+    return "%s %s" % (due[8:10].lstrip("0"), MONTHS[int(due[5:7]) - 1]), 0x8A9099
+
+
+def _screen_text(s):
+    """The screen fonts are ASCII (plus the rupee sign): replace anything else."""
+    return "".join(c if 32 <= ord(c) < 127 or c == "₹" else "?" for c in s)
+
+
+class TodoScreen(Screen):
+    def __init__(self):
+        global root
+        Screen.__init__(self)
+        root = self.grp
+        self.sub, self.clock = _head("TO-DO", 0x8B7CF6)
+        self.rows = []
+        for i in range(TODO_ROWS):
+            y = 29 + i * 27
+            box = RoundRect(6, y + 3, 14, 14, 3, fill=None, outline=0x8B7CF6, stroke=2)
+            root.append(box)
+            tp = displayio.Palette(1)
+            tp[0] = 0x8B7CF6
+            tick = vectorio.Polygon(pixel_shader=tp, x=6, y=y + 3,
+                                    points=[(2, 7), (5, 10), (12, 3), (12, 6), (5, 13), (2, 10)])
+            root.append(tick)
+            pp = displayio.Palette(1)
+            pp[0] = 0xFF5A5A
+            pri = vectorio.Rectangle(pixel_shader=pp, x=0, y=y + 2, width=3, height=16)
+            root.append(pri)
+            sp = displayio.Palette(1)
+            sp[0] = 0x6A727B
+            strike = vectorio.Rectangle(pixel_shader=sp, x=26, y=y + 10, width=1, height=1)
+            root.append(strike)
+            lbl = text(F_MED, "", 26, y + 1, WHITE)
+            due = text(F_SMALL, "", 314, y + 5, 0xB8C0C8, right=True)
+            sep = vectorio.Rectangle(pixel_shader=pal, width=288, height=1, x=26, y=y - 1,
+                                     color_index=10)
+            sep.hidden = True
+            if i:
+                root.append(sep)
+            self.rows.append((box, tick, pri, strike, lbl, due, sep))
+        self.empty = [text(F_MED, "", 160, 80, 0xB8C0C8, center=True),
+                      text(F_SMALL, "", 160, 104, 0x8A9099, center=True)]
+        self.foot = text(F_SMALL, "", 314, 158, 0x6A727B, right=True)
+        self.items = _todo_load()
+        self.page = 0
+        self.last_page = 0.0
+        self.dirty = True
+
+    @property
+    def dwell(self):
+        return max(SCREEN_SECONDS, self.pages() * TODO_PAGE_SECONDS)
+
+    def shown(self):
+        """Open tasks first (in your order), then done ones."""
+        return [t for t in self.items if not t[2]] + [t for t in self.items if t[2]]
+
+    def pages(self):
+        return max(1, (len(self.items) + TODO_ROWS - 1) // TODO_ROWS)
+
+    def changed(self):
+        todo_save(self.items)
+        self.dirty = True
+
+    def enter(self, now):
+        self.page = 0
+        self.last_page = now
+        self.draw()
+
+    def boot(self, now):
+        self.page = (self.page + 1) % self.pages()
+        self.last_page = now
+        self.draw()
+
+    def frame(self, now):
+        if self.dirty:
+            self.draw()
+        if self.pages() > 1 and now - self.last_page > TODO_PAGE_SECONDS:
+            self.last_page = now
+            self.page = (self.page + 1) % self.pages()
+            self.draw()
+
+    def second(self, hhmm):
+        Screen.second(self, hhmm)
+        if hhmm.endswith(":00") and self.grp is display.root_group:
+            self.dirty = True            # due labels change at midnight
+
+    def draw(self):
+        self.dirty = False
+        items = self.shown()
+        open_n = sum(1 for t in items if not t[2])
+        self.sub.text = ("%d OPEN" % open_n if open_n else "ALL DONE") if items else ""
+        self.page = min(self.page, self.pages() - 1)
+        chunk = items[self.page * TODO_ROWS:(self.page + 1) * TODO_ROWS]
+        for i, (box, tick, pri, strike, lbl, due, sep) in enumerate(self.rows):
+            if i >= len(chunk):
+                box.hidden = tick.hidden = pri.hidden = strike.hidden = sep.hidden = True
+                lbl.text = due.text = ""
+                continue
+            _id, txt, done, high, dd = chunk[i][:5]
+            box.hidden = sep.hidden = False
+            tick.hidden = not done
+            pri.hidden = not high or done
+            d_txt, d_col = due_label(dd) if not done else ("", 0)
+            due.text, due.color = d_txt, d_col
+            room = 284 - (px_width(F_SMALL, d_txt) + 8 if d_txt else 0)
+            t = _screen_text(txt)
+            if px_width(F_MED, t) > room:
+                while t and px_width(F_MED, t + "...") > room:
+                    t = t[:-1]
+                t = t.rstrip() + "..."
+            lbl.text = t
+            lbl.color = 0x6A727B if done else WHITE
+            strike.hidden = not done
+            if done:
+                strike.width = max(1, px_width(F_MED, t))
+        if not items:
+            self.empty[0].text = "Nothing to do!"
+            self.empty[1].text = "Add tasks at http://%s:%d/todo" % (MY_IP, LOGIN_PORT)
+        else:
+            self.empty[0].text = self.empty[1].text = ""
+        self.foot.text = ("page %d/%d" % (self.page + 1, self.pages())) if self.pages() > 1 else ""
+
+
+todo_screen = TodoScreen()
+EXTRA["todo"] = todo_screen
+
+
 # ------------------------------------------------------------- night screensavers
 # NIGHT_SCREEN = "clock" (default), "matrix", "fire", "stars" or "cycle" (changes every hour).
 # They can also go in SCREEN_ORDER for the daytime rotation.
@@ -2693,7 +2881,7 @@ for _n, _s in EXTRA.items():
     ALL_SCREENS[_n] = _s.grp
 TICKERS = {"weather": weather_ticker, "portfolio": port_ticker, "markets": mkt_ticker,
            "cricket": cric_ticker}
-DEFAULT_ORDER = "weather,portfolio,heatmap,markets,cricket,stat,news,trivia,net,pet"
+DEFAULT_ORDER = "weather,todo,portfolio,heatmap,markets,cricket,stat,news,trivia,net,pet"
 
 
 def parse_order(text_):
@@ -3895,7 +4083,8 @@ def home(request: Request):
                 '<form action="/kite"><input name=url style="width:100%%;padding:10px">'
                 '<p><button style="padding:10px 18px">Send to board</button></p></form>')
         body = PAGE % ("Status: " + kite_status, link + form)
-    body = body.replace("</body>", '<p style="margin-top:32px"><a href="/settings">Settings</a></p>'
+    body = body.replace("</body>", '<p style="margin-top:32px"><a href="/todo">To-do list</a> '
+                        '<a href="/settings">Settings</a></p>'
                         '<p style="margin-top:16px"><a href="/cricket" '
                         'style="background:#444">Pick cricket match</a></p>'
                         '<p style="margin-top:16px"><a href="/rotate?on=%d" style="background:#444">'
@@ -4006,7 +4195,7 @@ def stat_debug(request: Request):
 # ------------------------------------------------------------- settings page
 SCREEN_LABELS = {"weather": "Weather", "portfolio": "Portfolio", "heatmap": "Holdings heatmap",
                  "markets": "Markets", "cricket": "Cricket", "stat": "Stat of the day",
-                 "news": "News", "trivia": "Trivia", "net": "Internet", "pet": "Pet",
+                 "news": "News", "trivia": "Trivia", "net": "Internet", "pet": "Pet", "todo": "To-do",
                  "clock": "Big clock", "matrix": "Matrix rain", "fire": "Fire", "stars": "Starfield"}
 RESTART_KEYS = ("WEATHER_TOWN", "WEATHER_LAT", "WEATHER_LON", "TRIVIA_SOURCE", "PET_NAME", "NEWS_COUNT")
 force_show = None            # the loop switches to this screen on its next pass
@@ -4292,6 +4481,150 @@ def settings_reset(request: Request):
     reboot_at = time.monotonic() + 2
     return _page(request, SET_PAGE % "<p>Reset. Restarting... reload in about 20 seconds.</p>")
 
+
+
+# ------------------------------------------------------------- to-do page
+def esc_attr(t):
+    return esc(t).replace('"', "&quot;")
+
+
+def _todo_find(i):
+    for k, t in enumerate(todo_screen.items):
+        if t[0] == i:
+            return k
+    return -1
+
+
+def todo_html(msg="", edit=None):
+    items = todo_screen.shown()
+    out = ['<div class=note>%s</div>' % msg] if msg else []
+    out.append('<p><a href="/">&larr; Back</a> &nbsp; <a href="/todo/do?op=show">Show on the board</a></p>'
+               '<form action="/todo/add" class=add>'
+               '<input type=text name=t maxlength=80 placeholder="Add a task..." autofocus required>'
+               '<div class=opts><select name=p><option value=0>Normal</option><option value=1>High priority'
+               '</option></select> <input type=date name=d> <button>Add</button></div></form>')
+    open_n = sum(1 for t in items if not t[2])
+    out.append('<h3>%s</h3>' % ("%d to do" % open_n if open_n else ("All done!" if items else "No tasks yet")))
+    for t in items:
+        i, txt, done, high, due = t[:5]
+        if edit == i:
+            out.append('<form action="/todo/do" class="row edit"><input type=hidden name=op value=save>'
+                       '<input type=hidden name=id value=%d><input type=text name=t maxlength=80 value="%s">'
+                       '<div class=opts><select name=p>%s</select> <input type=date name=d value="%s"> '
+                       '<button>Save</button> <a href="/todo">Cancel</a></div></form>'
+                       % (i, esc_attr(txt), _opt(((0, "Normal"), (1, "High priority")), 1 if high else 0),
+                          esc_attr(due)))
+            continue
+        d_txt, d_col = due_label(due) if not done else ("", 0)
+        out.append(
+            '<div class=row><a class="chk%s" href="/todo/do?op=toggle&id=%d">%s</a>'
+            '<span class="name%s">%s%s</span>%s'
+            '<a class=arr href="/todo/do?op=up&id=%d">&#9650;</a>'
+            '<a class=arr href="/todo/do?op=down&id=%d">&#9660;</a>'
+            '<a class=arr href="/todo?edit=%d">&#9998;</a>'
+            '<a class="arr del" href="/todo/do?op=del&id=%d">&#10005;</a></div>'
+            % (" done" if done else "", i, "&#10003;" if done else "",
+               " done" if done else "", '<b class=hi>!</b> ' if high and not done else "", esc(txt),
+               ('<span class=due style="color:#%06x">%s</span>' % (d_col or 0x8A9099, d_txt)) if d_txt else "",
+               i, i, i, i))
+    if any(t[2] for t in items) or open_n > 1:
+        out.append('<p class=tools>')
+        if open_n > 1:
+            out.append('<a href="/todo/do?op=sort">Sort by priority and due date</a> &nbsp; ')
+        if any(t[2] for t in items):
+            out.append('<a href="/todo/do?op=clear">Clear done tasks</a>')
+        out.append('</p>')
+    out.append('<p><small>Tip: phone shortcuts can add tasks with http://%s:%d/todo/add?t=Buy+milk'
+               '</small></p>' % (MY_IP, LOGIN_PORT))
+    page = SET_PAGE.replace("Dashboard settings</title>", "To-do</title>").replace(
+        "<h2>Dashboard settings</h2>", "<h2>To-do</h2>").replace("</style>", TODO_CSS + "</style>")
+    return page % "".join(out)
+
+
+TODO_CSS = (".add input[type=text]{font-size:17px;padding:10px}.opts{margin-top:8px;display:flex;gap:8px;"
+            "flex-wrap:wrap;align-items:center}.opts button{margin:0}"
+            ".chk{width:24px;height:24px;border:2px solid #8b7cf6;border-radius:6px;display:inline-flex;"
+            "align-items:center;justify-content:center;text-decoration:none;color:#fff;flex:none}"
+            ".chk.done{background:#8b7cf6}.name.done{color:#777;text-decoration:line-through}"
+            ".hi{color:#ff5a5a}.due{font-size:13px;white-space:nowrap}.del{color:#e57373}"
+            ".row.edit{display:block}.tools a{font-size:14px}")
+
+
+@server.route("/todo")
+def todo_page(request: Request):
+    e = request.query_params.get("edit", safe=False)
+    return _page(request, todo_html(edit=int(e) if e and e.isdigit() else None))
+
+
+@server.route("/todo.json")
+def todo_json(request: Request):
+    items = todo_screen.shown()
+    return Response(request, json.dumps([{"id": t[0], "text": t[1], "done": bool(t[2]), "high": bool(t[3]),
+                                          "due": t[4]} for t in items]), content_type="application/json")
+
+
+def _todo_fields(q):
+    def g(k):
+        v = q.get(k, safe=False)
+        return "" if v is None else unquote(v).strip()
+    due = g("d")
+    if due and not (len(due) == 10 and due[4] == "-" and due[7] == "-" and
+                    due.replace("-", "").isdigit()):
+        due = ""
+    return g("t")[:80], 1 if g("p") == "1" else 0, due
+
+
+@server.route("/todo/add")
+def todo_add(request: Request):
+    txt, high, due = _todo_fields(request.query_params)
+    msg = ""
+    if txt:
+        items = todo_screen.items
+        new_id = max([t[0] for t in items] or [0]) + 1
+        items.append([new_id, txt, 0, high, due])
+        try:
+            todo_screen.changed()
+            msg = "Added."
+        except Exception as e:  # noqa: BLE001
+            items.pop()
+            msg = "Couldn't add: %s" % esc(str(e))
+    return _page(request, todo_html(msg))
+
+
+@server.route("/todo/do")
+def todo_do(request: Request):
+    global force_show
+    q = request.query_params
+    op = q.get("op", safe=False)
+    sid = q.get("id", safe=False)
+    i = _todo_find(int(sid)) if sid and sid.isdigit() else -1
+    items = todo_screen.items
+    if op == "show":
+        force_show = "todo"
+        return _page(request, '<!doctype html><meta http-equiv="refresh" content="0;url=/todo">')
+    if op == "toggle" and i >= 0:
+        items[i][2] = 0 if items[i][2] else 1
+    elif op == "del" and i >= 0:
+        items.pop(i)
+    elif op in ("up", "down") and i >= 0:
+        same = [k for k, t in enumerate(items) if t[2] == items[i][2]]   # move among open (or done) tasks
+        pos = same.index(i) + (-1 if op == "up" else 1)
+        if 0 <= pos < len(same):
+            j = same[pos]
+            items[i], items[j] = items[j], items[i]
+    elif op == "save" and i >= 0:
+        txt, high, due = _todo_fields(q)
+        if txt:
+            items[i][1], items[i][3], items[i][4] = txt, high, due
+    elif op == "clear":
+        items[:] = [t for t in items if not t[2]]
+    elif op == "sort":
+        items.sort(key=lambda t: (t[2], 0 if t[3] else 1, t[4] or "9999-99-99"))
+    try:
+        todo_screen.changed()
+    except Exception as e:  # noqa: BLE001
+        return _page(request, todo_html("Couldn't save: %s" % esc(str(e))))
+    return _page(request, '<!doctype html><meta http-equiv="refresh" content="0;url=/todo">')
 
 
 @server.route("/kite")

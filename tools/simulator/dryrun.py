@@ -70,6 +70,14 @@ def client():
     r = urllib.request.urlopen("http://127.0.0.1:8080/settings/save?" + _enc(
         dict(form, WEATHER_TOWN="Bijnor")), timeout=4).read().decode()
     print("town change:", r.split("<div class=note>")[1].split("</div>")[0][:120])
+    # TODO TEST: add with real form encoding, odd characters, then the page and the screen text
+    for t in ("Mom's birthday gift <surprise> & cake", "दूध लेना", "Fix 🔥 bug"):
+        urllib.request.urlopen("http://127.0.0.1:8080/todo/add?" + _enc({"t": t, "p": "1", "d": "2026-11-12"}), timeout=4).read()
+    r = urllib.request.urlopen("http://127.0.0.1:8080/todo", timeout=4).read().decode()
+    print("todo items:", [x[1] for x in NS["todo_screen"].items])
+    print("page escaped:", "&lt;surprise>" in r and "<surprise>" not in r, "| hindi kept on page:", "दूध" in r)
+    NS["todo_screen"].draw()
+    print("screen text:", [row[4].text for row in NS["todo_screen"].rows if row[4].text])
     # THEME TEST: choosing a look saves it to NVM and asks for a restart
     r = urllib.request.urlopen("http://127.0.0.1:8080/theme?name=classic", timeout=4).read().decode()
     print("theme page:", r.split("<p>")[1][:60] if "<p>" in r else r[:80], "| nvm[0] =", NS["microcontroller"].nvm[0] if "microcontroller" in NS else "?")
