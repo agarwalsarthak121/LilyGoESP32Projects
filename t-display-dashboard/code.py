@@ -564,8 +564,8 @@ class WeatherIcon:
         if (kind, day) == self.kind:
             return
         self.kind = (kind, day)
+        shown, self.bmp = self.bmp, displayio.Bitmap(self.W, self.H, len(self.COLS))   # draw off-screen
         b = self.bmp
-        b.fill(0)
         if kind in ("clear", "partly"):
             if day:
                 self._sun(22 if kind == "partly" else 30, 20 if kind == "partly" else 24, 10 if kind == "partly" else 11)
@@ -591,6 +591,8 @@ class WeatherIcon:
                     bitmaptools.draw_line(b, 34 + o, 32, 26 + o, 41, 6)
                     bitmaptools.draw_line(b, 26 + o, 41, 35 + o, 41, 6)
                     bitmaptools.draw_line(b, 35 + o, 41, 27 + o, 49, 6)
+        bitmaptools.blit(shown, b, 0, 0)
+        self.bmp = shown
 
 
 class Gauge:
@@ -1717,6 +1719,7 @@ class NetScreen(Screen):
         self.ping = text(F_NEWS, "--", 8, 36, WHITE)
         self.ping_sub = text(F_SMALL, "", 8, 68, 0x8A9099)
         self.g = displayio.Bitmap(self.N * 3, 46, 5)
+        self.g_back = displayio.Bitmap(self.N * 3, 46, 5)
         gp = displayio.Palette(5)
         gp[0], gp[1], gp[2], gp[3], gp[4] = 0x12161A, 0x2FA7E0, 0xFFB020, 0xE0443A, 0x2A3038
         root.append(displayio.TileGrid(self.g, pixel_shader=gp, x=316 - self.N * 3, y=28))
@@ -1803,7 +1806,7 @@ class NetScreen(Screen):
             loss = 100 * (len(self.samples) - len(ok)) // len(self.samples)
             self.ping_sub.text = ("avg %d ms  loss %d%%" % (sum(ok) / len(ok), loss)) if ok \
                 else "no replies"
-        g = self.g
+        g = self.g_back                              # draw off-screen, then copy in one go
         g.fill(0)
         for y in (11, 22, 33):                       # grid lines every 50 ms
             bitmaptools.fill_region(g, 0, y, g.width, y + 1, 4)
@@ -1815,6 +1818,7 @@ class NetScreen(Screen):
                 h = max(2, min(g.height, int(s / 150 * g.height)))
                 bitmaptools.fill_region(g, x, g.height - h, x + 2, g.height, 1 if s < 100 else 2)
             x += 3
+        bitmaptools.blit(self.g, g, 0, 0)
         self.status()
 
     def status(self):
@@ -2231,6 +2235,7 @@ class PetScreen(Screen):
         self.born, self.fed, self.meals = self.load()
         self.state = None
         self.face = None
+        self.poses = {}
         self.eat_until = 0.0
         self.thanks_until = 0.0
         self.next_blink = 0.0
@@ -2320,9 +2325,19 @@ class PetScreen(Screen):
         return "Ouch, %+.1f%% today. I'll guard the portfolio!" % pct
 
     # -- drawing: a sitting desi dog, facing right, or curled up asleep
-    def draw(self, mood, blink, mouth_open, wag):
-        b = self.bmp
-        b.fill(0)
+    def pose(self, face):
+        """The finished picture for a pose, drawn off-screen once and then reused.
+        (Drawing straight onto the visible bitmap let the screen refresh catch it half-done.)"""
+        bmp = self.poses.get(face)
+        if bmp is None:
+            if len(self.poses) > 16:
+                self.poses = {}
+            bmp = displayio.Bitmap(self.W, self.H, len(PCOL))
+            self.draw(bmp, *face)
+            self.poses[face] = bmp
+        return bmp
+
+    def draw(self, b, mood, blink, mouth_open, wag):
 
         def blob(cx, cy, rx, ry, v):           # outlined oval
             _ellipse(b, cx, cy, rx + 1, ry + 1, D_LINE)
@@ -2445,7 +2460,7 @@ class PetScreen(Screen):
         face = (mood, blink, mouth, wag)
         if face != self.face:
             self.face = face
-            self.draw(mood, blink, mouth, wag)
+            bitmaptools.blit(self.bmp, self.pose(face), 0, 0)     # one quick copy, no half-drawn frames
         # body language
         phase = now % 3.0
         y = 36
