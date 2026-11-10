@@ -23,7 +23,7 @@ A Wi-Fi desk dashboard for the **LilyGO T-Display-S3** (ESP32-S3, 1.9" 320×170 
 | **Stat of the day** | A player's international numbers this year plus career line; a cricket fact when offline | ESPNcricinfo Statsguru |
 | **Trivia** | An India quiz question; the answer lights up after 30 s | `trivia_india.txt` on the board (241 questions, add your own) |
 | **Internet** | Ping graph, router ping, Wi-Fi signal, board speed test, router uptime, outage log | Ping, Cloudflare speed test, router UPnP |
-| **Pet** | Moong, a sprout creature whose mood follows today's P&L; feed it with BOOT | Kite + NVM |
+| **Pet** | Sheru, an Indian indie dog whose mood follows today's P&L; feed him with BOOT | Kite + NVM |
 | **Night clock** | Large dim analog clock, date, temperature (23:00–07:00 by default) | — |
 | **Night screensavers** | Matrix rain, fire or a starfield instead of the clock (`NIGHT_SCREEN`) | — |
 
@@ -71,7 +71,7 @@ The original grey look:
 - **Stat of the day:** one player per day from `STAT_PLAYERS` (Cricinfo player ids). Shows this year's runs or wickets, five key numbers and the career line, refreshed every 6 hours. If Statsguru can't be read it shows a cricket fact instead; `/stat/debug` on the board's web page shows what it got.
 - **Trivia:** 241 India questions in `trivia_india.txt` — history, geography, polity, science and ISRO, sports, culture, cinema, food, economy and Uttar Pradesh — shuffled so none repeats until all have been asked. Add your own as `CATEGORY|Question|Right answer|Wrong|Wrong|Wrong` lines. The bar counts down, then the right answer turns green for 8 seconds; the screen stays up for the whole question when auto-rotating. `TRIVIA_SOURCE = "world"` switches to Open Trivia DB (mostly US/UK questions) and `"mix"` alternates.
 - **Internet:** pings `PING_HOST` (1.1.1.1) every 5 s while showing (every minute otherwise) and the router, Wi-Fi signal strength, a 400 KB download speed test every 30 minutes (this measures the board's own speed, which is far below your line's), the router's uptime if it answers UPnP (many do; otherwise "n/a"), and the last outage.
-- **Pet:** Moong's leaf and face follow today's P&L (thrilled above +1.5%, worried below −1.5%), it gets hungry after 8 hours without food, and it sleeps at night. Its birthday, last meal and meal count survive restarts. Feed it with BOOT or at `/pet`.
+- **Pet:** Sheru, a desi indie dog with a red collar. His tail wags faster the better the day, his tongue comes out when we're up, and on a red day his ears go back and his tail tucks (thrilled above +1.5%, worried below −1.5%). He gets hungry after 8 hours without roti (his steel bowl appears), and sleeps curled up at night. His birthday, last meal and meal count survive restarts. Feed him with BOOT or at `/pet`.
 - **Screensavers:** set `NIGHT_SCREEN` to `matrix`, `fire`, `stars` or `cycle` (a different one each hour). They can also go in `SCREEN_ORDER`.
 
 ## Buttons
@@ -124,7 +124,7 @@ Most settings can be changed from your phone at `http://<board-ip>:8080/settings
 | `STAT_PLAYERS` | Kohli, Rohit, Bumrah, Gill | `id:Name` or `id:Name:bowl`, comma separated (the id is in the player's Cricinfo URL) |
 | `STAT_CLASS` | `11` | `11` all internationals, `1` Tests, `2` ODIs, `3` T20Is |
 | `TRIVIA_SECONDS` / `TRIVIA_SOURCE` | `30` / `india` | Time to think; `india` (the file), `world` (Open Trivia DB) or `mix` |
-| `PET_NAME` / `PING_HOST` | `Moong` / `1.1.1.1` | Pet's name; what the Internet screen pings |
+| `PET_NAME` / `PING_HOST` | `Sheru` / `1.1.1.1` | Pet's name; what the Internet screen pings |
 | `SCREEN_SECONDS` | `15` | Seconds per screen |
 | `AUTO_ROTATE` | on | `off` = change screens only with the KEY button |
 | `NEWS_SECONDS` / `NEWS_PER_VISIT` | `6` / `10` | Seconds per headline / headlines per visit |

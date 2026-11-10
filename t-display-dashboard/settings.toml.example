@@ -55,7 +55,7 @@ FMP_API_KEY = ""
 # TRIVIA_SECONDS = "30"
 # TRIVIA_SOURCE = "india"     # questions from trivia_india.txt; "world" = Open Trivia DB, "mix" = both
 # TRIVIA_CATEGORY = ""        # only for "world"/"mix": 9 general, 17 science, 21 sports, 23 history
-# PET_NAME = "Moong"
+# PET_NAME = "Sheru"
 # PING_HOST = "1.1.1.1"
 
 # --- Night mode ---

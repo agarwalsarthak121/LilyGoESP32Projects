@@ -26,7 +26,7 @@
 #   STAT_PLAYERS="253802:Virat Kohli,625383:Jasprit Bumrah:bowl"  (Cricinfo id:name[:bowl])
 #   STAT_CLASS="11"       (11 all internationals, 1 Tests, 2 ODIs, 3 T20Is)
 #   TRIVIA_SECONDS="30"   TRIVIA_SOURCE="india" (or "world" = Open Trivia DB, "mix")
-#   PET_NAME="Moong"      PING_HOST="1.1.1.1"
+#   PET_NAME="Sheru"      PING_HOST="1.1.1.1"
 #   WATCHDOG="off"        (turn off the hang watchdog, e.g. while debugging over the REPL)
 #   NIGHT_HOURS="23-7"    (dark, dim clock only at night; "" turns night mode off)
 #   DAY_BRIGHTNESS="0.6"  NIGHT_BRIGHTNESS="0.05"
@@ -2098,15 +2098,37 @@ EXTRA["trivia"] = trivia_screen
 
 
 # ------------------------------------------------------------- virtual pet
-# A little sprout creature. Its leaf and face follow today's portfolio move, it gets
-# hungry if nobody presses BOOT (feed) for a while, and it sleeps at night.
+# Sheru, an Indian indie dog. His tail, ears and face follow today's portfolio move,
+# he gets hungry if nobody presses BOOT (feed) for a while, and he sleeps curled up at night.
 # Kept in NVM: birthday, last meal and number of meals.
-PET_NAME = (cfg("PET_NAME") or "Moong")[:10]
+PET_NAME = (cfg("PET_NAME") or "Sheru")[:10]
 PET_NVM = 64          # nvm[64] "P", [65:69] born, [69:73] last fed, [73:75] meals
-PCOL = (0, 0xF6C177, 0xD99A55, 0x5A3A22, 0x1B1B1B, 0xFFFFFF, 0xFF8FA3, 0x7A2E2E,
-        0x5BD16B, 0x2E8B3E, 0xA8834A, 0x6EC6FF, 0xE0A030, 0xFF4D6D)
-P_BODY, P_SHADE, P_LINE, P_EYE, P_SHINE, P_CHEEK, P_MOUTH, P_LEAF, P_LEAF2, P_WILT, \
-    P_TEAR, P_FOOD, P_HEART = range(1, 14)
+PCOL = (0, 0xD9A066, 0xA8713E, 0xF4DDB3, 0x4A2E1A, 0x1B1B1B, 0xFFFFFF, 0xF2A0A8, 0xFF6F7F,
+        0xD23A3A, 0xFFD24A, 0x6EC6FF, 0xB8C0C8, 0x6A737C, 0xC98A3A)
+D_FUR, D_SHADE, D_CREAM, D_LINE, D_EYE, D_SHINE, D_PINK, D_TONGUE, D_COLLAR, D_TAG, \
+    D_TEAR, D_BOWL, D_BOWL2, D_FOOD = range(1, 15)
+
+
+def _tri(bmp, p1, p2, p3, v):
+    """Filled triangle (scanline)."""
+    pts = sorted((p1, p2, p3), key=lambda p: p[1])
+    (x1, y1), (x2, y2), (x3, y3) = pts
+    for y in range(max(0, y1), min(bmp.height, y3 + 1)):
+        xs = []
+        for (ax, ay), (bx, by) in (((x1, y1), (x3, y3)), ((x1, y1), (x2, y2)), ((x2, y2), (x3, y3))):
+            if ay != by and min(ay, by) <= y <= max(ay, by):
+                xs.append(ax + (y - ay) * (bx - ax) / (by - ay))
+        if xs:
+            l, r = int(min(xs) + 0.5), int(max(xs) + 0.5)
+            bitmaptools.fill_region(bmp, max(0, l), y, min(bmp.width, r + 1), y + 1, v)
+
+
+def _rope(bmp, pts, r, v):
+    """A thick curve through points (the tail)."""
+    for (ax, ay), (bx, by) in zip(pts, pts[1:]):
+        n = max(abs(bx - ax), abs(by - ay), 1)
+        for i in range(n + 1):
+            _circle(bmp, int(ax + (bx - ax) * i / n + 0.5), int(ay + (by - ay) * i / n + 0.5), r, v)
 
 
 def _ellipse(bmp, cx, cy, rx, ry, v):
@@ -2117,16 +2139,16 @@ def _ellipse(bmp, cx, cy, rx, ry, v):
 
 
 class PetScreen(Screen):
-    W, H = 56, 50
+    W, H = 60, 50
 
     def __init__(self):
         global root
         Screen.__init__(self)
         root = self.grp
-        self.sub, self.clock = _head(PET_NAME.upper(), 0x5BD16B, "YOUR PORTFOLIO PET")
+        self.sub, self.clock = _head(PET_NAME.upper(), 0xD9A066, "YOUR PORTFOLIO DOG")
         sh = displayio.Palette(1)
         sh[0] = 0x1C2026
-        root.append(vectorio.Polygon(pixel_shader=sh, x=68, y=138, points=[
+        root.append(vectorio.Polygon(pixel_shader=sh, x=66, y=136, points=[
             (int(32 * math.cos(a * math.pi / 8)), int(5 * math.sin(a * math.pi / 8))) for a in range(16)]))
         self.bmp = displayio.Bitmap(self.W, self.H, len(PCOL))
         pp = displayio.Palette(len(PCOL))
@@ -2134,7 +2156,7 @@ class PetScreen(Screen):
             pp[i] = c
         pp.make_transparent(0)
         self.pal = pp
-        self.sprite = displayio.Group(scale=2, x=12, y=36)
+        self.sprite = displayio.Group(scale=2, x=8, y=36)
         self.sprite.append(displayio.TileGrid(self.bmp, pixel_shader=pp))
         root.append(self.sprite)
         hp = displayio.Palette(1)
@@ -2148,7 +2170,7 @@ class PetScreen(Screen):
         self.tear = vectorio.Circle(pixel_shader=tp, radius=3, x=0, y=0)
         self.tear.hidden = True
         root.append(self.tear)
-        self.zzz = text(F_TITLE, "", 112, 40, 0xB0C4FF)
+        self.zzz = text(F_TITLE, "", 100, 46, 0xB0C4FF)
         root.append(RoundRect(134, 30, 182, 64, 8, fill=0x1C2128))
         self.say = [text(F_MED, "", 142, 36 + i * 18, WHITE) for i in range(3)]
         text(F_SMALL, "FULL", 134, 102, 0x8A9099)
@@ -2230,84 +2252,126 @@ class PetScreen(Screen):
     def words(self, mood, now):
         pct = port_day_pct
         if now < self.thanks_until and mood != "eat":
-            return "Thank you! That was yummy."
+            return "Woof! Thank you, that roti was yummy."
         if not self.born:
-            return "Hi! I'm %s. Press BOOT to give me my first meal!" % PET_NAME
+            return "Woof! I'm %s. Press BOOT to give me my first roti!" % PET_NAME
         closed = not market_open()
-        return {
-            "sleep": "Zzz... see you in the morning.",
-            "eat": "Nom nom nom!",
-            "hungry": ("I haven't eaten in a whole day..." if self.hours_hungry() > 24
-                       else "I'm hungry! Press BOOT to feed me."),
-            "meh": "Log in to Kite so I know how we're doing!",
-            "ecstatic": "%+.1f%% today! Best. Day. Ever!" % pct,
-            "happy": ("Market's shut. We ended %+.1f%%. Nice!" % pct) if closed
-            else "We're up %+.1f%% today. Wheee!" % pct,
-            "sad": ("Market's shut. We ended %+.1f%%." % pct) if closed
-            else "Down %+.1f%%... hug me?" % pct,
-            "worried": "Ouch, %+.1f%% today. Hold steady!" % pct,
-        }[mood]
+        if mood == "sleep":
+            return "Zzz... (dreaming of biscuits)"
+        if mood == "eat":
+            return "Nom nom nom!"
+        if mood == "hungry":
+            return ("I haven't eaten all day... *whimper*" if self.hours_hungry() > 24
+                    else "My bowl is empty! Press BOOT to feed me.")
+        if mood == "meh" or pct is None:
+            return "Log in to Kite so I know whether to wag!"
+        if mood == "ecstatic":
+            return "%+.1f%% today! Zoomies time! Woof woof!" % pct
+        if mood == "happy":
+            return ("Market's shut. We ended %+.1f%%. Good day!" % pct) if closed \
+                else "We're up %+.1f%% today. *wags*" % pct
+        if mood == "sad":
+            return ("Market's shut. We ended %+.1f%%." % pct) if closed \
+                else "Down %+.1f%%... can I have a cuddle?" % pct
+        return "Ouch, %+.1f%% today. I'll guard the portfolio!" % pct
 
-    # -- drawing
-    def draw(self, mood, blink, mouth_open):
+    # -- drawing: a sitting desi dog, facing right, or curled up asleep
+    def draw(self, mood, blink, mouth_open, wag):
         b = self.bmp
         b.fill(0)
-        cx, cy = 28, 31
-        wilt = mood in ("sad", "worried", "hungry")
-        # sprout
-        leaf, leaf2 = (P_WILT, P_WILT) if wilt else (P_LEAF, P_LEAF2)
-        bitmaptools.draw_line(b, cx, cy - 15, cx, cy - 21, leaf2)
-        if wilt:
-            _ellipse(b, cx - 5, cy - 17, 4, 2, leaf)
-            _ellipse(b, cx + 5, cy - 17, 4, 2, leaf)
+
+        def blob(cx, cy, rx, ry, v):           # outlined oval
+            _ellipse(b, cx, cy, rx + 1, ry + 1, D_LINE)
+            _ellipse(b, cx, cy, rx, ry, v)
+
+        if mood == "sleep":
+            _rope(b, [(12, 40), (8, 44), (12, 47), (20, 47)], 3, D_LINE)
+            _rope(b, [(12, 40), (8, 44), (12, 47), (20, 47)], 2, D_FUR)
+            blob(28, 40, 19, 7, D_FUR)
+            _ellipse(b, 28, 43, 15, 3, D_SHADE)
+            blob(46, 38, 9, 7, D_FUR)
+            _tri(b, (40, 33), (35, 30), (44, 31), D_LINE)
+            _tri(b, (40, 33), (37, 31), (43, 32), D_SHADE)
+            blob(53, 41, 4, 3, D_CREAM)
+            b[56, 39] = b[57, 39] = D_EYE
+            bitmaptools.draw_line(b, 44, 37, 48, 37, D_LINE)          # closed eye
+            blob(50, 46, 5, 2, D_CREAM)                               # paws under the chin
+            return
+        down = mood in ("sad", "worried")
+        # tail: curled over the back and wagging, or tucked low when sad
+        if down:
+            tail = [(16, 38), (11, 42), (9, 46), (13, 48), (18, 48)]
+        elif wag:
+            tail = [(16, 31), (11, 28), (8, 23), (9, 18), (13, 15), (16, 17)]
         else:
-            _ellipse(b, cx - 5, cy - 23, 5, 3, leaf)
-            _ellipse(b, cx + 5, cy - 24, 5, 3, leaf)
-            bitmaptools.draw_line(b, cx - 8, cy - 23, cx - 2, cy - 23, leaf2)
-            bitmaptools.draw_line(b, cx + 2, cy - 24, cx + 8, cy - 24, leaf2)
-        # feet, body, shading
-        _ellipse(b, cx - 9, cy + 15, 5, 3, P_LINE)
-        _ellipse(b, cx + 9, cy + 15, 5, 3, P_LINE)
-        _ellipse(b, cx, cy, 21, 16, P_LINE)
-        _ellipse(b, cx, cy, 20, 15, P_SHADE)
-        _ellipse(b, cx - 1, cy - 2, 18, 13, P_BODY)
+            tail = [(16, 31), (10, 30), (6, 26), (5, 21), (7, 17), (11, 16)]
+        _rope(b, tail, 3, D_LINE)
+        _rope(b, tail, 2, D_FUR)
+        _circle(b, tail[-1][0], tail[-1][1], 2, D_CREAM)
+        # haunch, body, legs, chest
+        blob(21, 38, 10, 9, D_SHADE)
+        blob(28, 33, 9, 12, D_FUR)
+        _ellipse(b, 21, 38, 8, 7, D_FUR)
+        for x in (29, 35):                                  # front legs and paws
+            bitmaptools.fill_region(b, x - 1, 33, x + 6, 46, D_LINE)
+            bitmaptools.fill_region(b, x, 33, x + 5, 45, D_FUR)
+            blob(x + 3, 46, 3, 2, D_CREAM)
+        blob(22, 46, 5, 2, D_CREAM)
+        _ellipse(b, 34, 31, 5, 8, D_CREAM)
+        # ears: pointy and up, or folded back
+        if down:
+            ears = (((29, 12), (21, 7), (32, 7)), ((37, 9), (31, 3), (42, 6)))
+        else:
+            ears = (((28, 12), (30, 0), (35, 8)), ((38, 8), (43, 0), (46, 9)))
+        for p1, p2, p3 in ears:
+            _tri(b, (p1[0] - 1, p1[1] + 1), (p2[0], p2[1] - 1), (p3[0] + 1, p3[1]), D_LINE)
+            _tri(b, p1, p2, p3, D_FUR)
+            if not down:
+                cx, cy = (p1[0] + p2[0] + p3[0]) // 3, (p1[1] + p2[1] + p3[1]) // 3
+                _tri(b, (cx - 1, cy + 2), (p2[0], p2[1] + 3), (cx + 2, cy + 1), D_PINK)
+        # head, muzzle, nose
+        blob(38, 17, 10, 8, D_FUR)
+        blob(47, 21, 7, 4, D_CREAM)                          # a proper long desi snout
+        bitmaptools.fill_region(b, 52, 18, 56, 21, D_EYE)
+        b[53, 18] = D_SHINE
         # eyes
-        for ex in (cx - 7, cx + 7):
-            ey = cy - 2
-            if mood == "sleep" or blink:
-                bitmaptools.draw_line(b, ex - 2, ey, ex + 2, ey, P_EYE)
+        for ex in (35, 41):
+            ey = 15
+            if blink:
+                bitmaptools.draw_line(b, ex - 1, ey, ex + 1, ey, D_EYE)
             elif mood in ("ecstatic", "happy", "eat"):
-                bitmaptools.draw_line(b, ex - 2, ey + 1, ex, ey - 1, P_EYE)
-                bitmaptools.draw_line(b, ex, ey - 1, ex + 2, ey + 1, P_EYE)
+                b[ex - 1, ey] = b[ex, ey - 1] = b[ex + 1, ey] = D_EYE      # happy ^ ^
             else:
-                _ellipse(b, ex, ey, 2, 3, P_EYE)
-                b[ex - 1, ey - 2] = P_SHINE
-                if mood in ("sad", "worried"):            # worried brows
-                    d = 1 if ex < cx else -1
-                    bitmaptools.draw_line(b, ex - 2, ey - 5 - d, ex + 2, ey - 5 + d, P_LINE)
-        # cheeks
-        if mood in ("ecstatic", "happy", "eat"):
-            _ellipse(b, cx - 13, cy + 3, 3, 1, P_CHEEK)
-            _ellipse(b, cx + 13, cy + 3, 3, 1, P_CHEEK)
-        # mouth
-        my = cy + 5
-        if mood == "eat" and mouth_open or mood == "worried":
-            _ellipse(b, cx, my + 1, 2, 2, P_MOUTH)
-        elif mood == "ecstatic":
-            _ellipse(b, cx, my + 1, 4, 3, P_MOUTH)
-            bitmaptools.fill_region(b, cx - 4, my - 2, cx + 5, my + 1, P_BODY)
-        elif mood in ("happy", "eat"):
-            for x, y in ((-3, 0), (-2, 1), (-1, 1), (0, 1), (1, 1), (2, 1), (3, 0)):
-                b[cx + x, my + y] = P_MOUTH
-        elif mood in ("sad",):
-            for x, y in ((-3, 1), (-2, 0), (-1, 0), (0, 0), (1, 0), (2, 0), (3, 1)):
-                b[cx + x, my + y] = P_MOUTH
-        elif mood == "hungry":
-            _ellipse(b, cx, my, 3, 1, P_MOUTH)
+                bitmaptools.fill_region(b, ex - 1, ey - 1, ex + 1, ey + 2, D_EYE)
+                b[ex - 1, ey - 1] = D_SHINE
+                if mood in ("worried", "sad", "hungry"):                 # puppy-dog brows
+                    d = 1 if ex < 38 else -1
+                    bitmaptools.draw_line(b, ex - 2, ey - 3 - d, ex + 1, ey - 3 + d, D_LINE)
+        # mouth and tongue
+        if mood == "eat" and mouth_open:
+            _ellipse(b, 49, 25, 3, 2, D_LINE)
+            _ellipse(b, 49, 25, 2, 1, D_TONGUE)
         else:
-            bitmaptools.draw_line(b, cx - 2, my, cx + 2, my, P_MOUTH)
-        if mood == "eat":                                    # the snack
-            _ellipse(b, cx + 9, my + 2, 2, 2, P_FOOD)
+            if mood in ("ecstatic", "happy"):
+                bitmaptools.fill_region(b, 47, 24, 51, 30, D_LINE)
+                bitmaptools.fill_region(b, 48, 24, 50, 29, D_TONGUE)
+            if down:
+                bitmaptools.draw_line(b, 45, 25, 50, 24, D_LINE)
+            else:
+                bitmaptools.draw_line(b, 43, 24, 46, 25, D_LINE)
+                bitmaptools.draw_line(b, 46, 25, 52, 23, D_LINE)
+        if mood in ("ecstatic", "happy", "eat"):
+            _ellipse(b, 33, 20, 2, 1, D_PINK)                            # blush
+        # red collar with a little tag: someone's adopted indie
+        for o in range(3):
+            bitmaptools.draw_line(b, 30, 24 + o, 40, 26 + o, D_COLLAR)
+        _circle(b, 36, 29, 1, D_TAG)
+        # the steel bowl
+        if mood in ("eat", "hungry"):
+            _ellipse(b, 53, 46, 6, 3, D_BOWL2)
+            bitmaptools.fill_region(b, 47, 43, 60, 45, D_BOWL)
+            if mood == "eat":
+                _ellipse(b, 53, 43, 4, 1, D_FOOD)
 
     def bar(self, i, frac, colour):
         b, p = self.bars[i]
@@ -2330,31 +2394,33 @@ class PetScreen(Screen):
         if now > self.next_blink:
             self.blink_until = now + 0.15
             self.next_blink = now + 2.5 + random.random() * 3
-        blink = now < self.blink_until
+        blink = now < self.blink_until and mood != "sleep"
         mouth = mood == "eat" and int(now * 4) % 2 == 0
-        face = (mood, blink, mouth)
+        speed = {"ecstatic": 0.12, "happy": 0.25, "eat": 0.2, "meh": 0.6, "hungry": 0.9}.get(mood)
+        wag = bool(speed) and int(now / speed) % 2 == 0
+        face = (mood, blink, mouth, wag)
         if face != self.face:
             self.face = face
-            self.draw(mood, blink, mouth)
+            self.draw(mood, blink, mouth, wag)
         # body language
         phase = now % 3.0
         y = 36
-        if mood == "ecstatic" and phase < 0.3 or mood == "happy" and phase < 0.2:
-            y = 26                                           # a little hop
-        elif mood in ("meh", "sad", "worried", "hungry", "happy", "ecstatic"):
-            y = 36 + (2 if int(now * 2) % 2 else 0)          # breathing
-        x = 12 + (1 if mood == "hungry" and int(now * 8) % 16 == 0 else 0)
+        if mood == "ecstatic" and phase < 0.35:
+            y = 26                                           # a happy hop
+        elif mood not in ("sleep",):
+            y = 36 + (1 if int(now * 2) % 2 else 0)          # breathing
+        x = 8 + (1 if mood == "hungry" and int(now * 8) % 16 == 0 else 0)
         if (self.sprite.x, self.sprite.y) != (x, y):
             self.sprite.x, self.sprite.y = x, y
         # hearts, tears, z's
         self.heart.hidden = mood != "ecstatic" and now >= self.thanks_until
         if not self.heart.hidden:
             k = (now % 1.6) / 1.6
-            self.heart.x, self.heart.y = 98, int(52 - 30 * k)
+            self.heart.x, self.heart.y = 112, int(46 - 30 * k)
         self.tear.hidden = mood not in ("sad", "worried")
         if not self.tear.hidden:
             k = (now % 1.8) / 1.8
-            self.tear.x, self.tear.y = 50, int(y + 62 + 22 * k)
+            self.tear.x, self.tear.y = 73, int(y + 34 + 14 * k)
         if mood == "sleep":
             self.zzz.text = ("z", "z Z", "z Z z")[int(now) % 3]
         elif self.zzz.text:
@@ -2375,8 +2441,8 @@ class PetScreen(Screen):
                     age, "" if age == 1 else "s", self.meals, "" if self.meals == 1 else "s")
                 self.hint.text = "Fed %s ago - BOOT feeds" % _ago(time.time() - self.fed)
             else:
-                self.info.text = "Not born yet"
-                self.hint.text = "BOOT = first meal"
+                self.info.text = "Just adopted!"
+                self.hint.text = "BOOT = first roti"
 
 
 pet_screen = PetScreen()
