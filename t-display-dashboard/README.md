@@ -70,7 +70,7 @@ The original grey look:
 - **Holdings heatmap:** a squarified treemap of your Kite holdings (up to 16 tiles; the rest fold into "+N MORE"). Skipped in the rotation until you log in.
 - **Stat of the day:** one player per day from `STAT_PLAYERS` (Cricinfo player ids). Shows this year's runs or wickets, five key numbers and the career line, refreshed every 6 hours. If Statsguru can't be read it shows a cricket fact instead; `/stat/debug` on the board's web page shows what it got.
 - **Trivia:** 241 India questions in `trivia_india.txt` — history, geography, polity, science and ISRO, sports, culture, cinema, food, economy and Uttar Pradesh — shuffled so none repeats until all have been asked. Add your own as `CATEGORY|Question|Right answer|Wrong|Wrong|Wrong` lines. The bar counts down, then the right answer turns green for 8 seconds; the screen stays up for the whole question when auto-rotating. `TRIVIA_SOURCE = "world"` switches to Open Trivia DB (mostly US/UK questions) and `"mix"` alternates.
-- **Internet:** pings `PING_HOST` (1.1.1.1) every 5 s while showing (every minute otherwise) and the router, Wi-Fi signal strength, a 400 KB download speed test every 30 minutes (this measures the board's own speed, which is far below your line's), the router's uptime if it answers UPnP (many do; otherwise "n/a"), and the last outage.
+- **Internet:** pings `PING_HOST` (1.1.1.1) every 5 s while showing (every minute otherwise) and the router, Wi-Fi signal strength, a download speed test every 30 minutes (BOOT runs one now; up to 1 MB from CacheFly, then Cloudflare or Tele2 if that fails; retried after 2 minutes if all fail; it measures the board's own speed, which is far below your line's), the router's uptime if it answers UPnP (many do; otherwise "n/a"), and the last outage.
 - **Pet:** Sheru, a desi indie dog with a red collar. His tail wags faster the better the day, his tongue comes out when we're up, and on a red day his ears go back and his tail tucks (thrilled above +1.5%, worried below −1.5%). He gets hungry after 8 hours without roti (his steel bowl appears), and sleeps curled up at night. His birthday, last meal and meal count survive restarts. Feed him with BOOT or at `/pet`.
 - **Screensavers:** set `NIGHT_SCREEN` to `matrix`, `fire`, `stars` or `cycle` (a different one each hour). They can also go in `SCREEN_ORDER`.
 
@@ -99,6 +99,7 @@ Open `http://<board-ip>:8080` on a phone or laptop on the same Wi-Fi:
 | `/cricket/debug` | Raw details of the cricket feed, for troubleshooting |
 | `/rotate?on=0` / `?on=1` | Turn auto-rotate off / on |
 | `/pet` | See when the pet last ate and feed it from your phone |
+| `/debug` | Recent errors, speed test and router-uptime results, memory: send a screenshot if something isn't working |
 | `/stat/debug` | What the Stat of the day screen got from Statsguru |
 | `/theme` | Switch between **aura** and **classic** (saved on the board, restarts it); "Use settings.toml" goes back to the `THEME` setting |
 

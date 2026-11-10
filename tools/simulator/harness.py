@@ -125,8 +125,11 @@ class Session:
                     '<table class="engineTable"><thead><tr class="headlinks">' + head + "</tr></thead><tbody>" +
                     row("year %d" % (yr - 1), car) + row("year %d" % yr, cur) + "</tbody></table></body></html>")
             return Resp({}, html.encode())
-        if "speed.cloudflare.com" in url:
-            return Resp({}, b"x" * 400000)
+        if "speed.cloudflare.com" in url or "cachefly" in url or "tele2" in url:
+            fail = os.environ.get("SPEED_FAIL", "")
+            if fail == "all" or (fail and fail in url):
+                raise OSError(-2, "Name or service not known" if "cachefly" in url else "SSL handshake failed")
+            return Resp({}, b"x" * 1000000)
         if "kite.trade" in url:
             print("GET", url, headers["Authorization"])
             if KITE_EXPIRED:

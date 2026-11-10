@@ -1681,7 +1681,12 @@ EXTRA["heatmap"] = heat_screen
 # Ping to the internet and the router, Wi-Fi signal, a speed test of the board's own
 # download speed, router uptime over UPnP (if the router allows it) and the outage log.
 PING_HOST = cfg("PING_HOST") or "1.1.1.1"
-SPEED_URL = "https://speed.cloudflare.com/__down?bytes=400000"
+# speed test servers, tried in order: plain HTTP first (TLS is slow and memory-hungry on the
+# board), a CDN close to India, then fallbacks
+SPEED_URLS = ("http://cachefly.cachefly.net/1mb.test",
+              "https://speed.cloudflare.com/__down?bytes=1000000",
+              "http://speedtest.tele2.net/1MB.zip")
+SPEED_HDR = {"User-Agent": "Mozilla/5.0 (T-Display-S3 desk dashboard)"}
 net_log = []          # (wall time it went down, wall time it came back)
 net_down_at = None
 
@@ -1724,6 +1729,9 @@ class NetScreen(Screen):
         self.t_out = _tile(214, 126, 102, 38, "LAST OUTAGE")
         self.last_ping = self.last_speed = self.last_upnp = -1e6
         self.speed_now = False
+        self.speed_ok = False
+        self.speed_log = "not run yet"
+        self.upnp_log = "not tried yet"
         self.upnp_ctl = None
         self.upnp_tries = 0
         self.router_up = None           # (uptime seconds, monotonic when read)
@@ -1737,18 +1745,22 @@ class NetScreen(Screen):
         if now - self.last_ping > (5 if showing_me else 60):
             self.last_ping = now
             self.do_ping()
-        if net_state == "ok" and (self.speed_now or now - self.last_speed > 1800):
+        wait = 1800 if self.speed_ok else 120             # after a failure, try again soon
+        if net_state == "ok" and (self.speed_now or now - self.last_speed > wait):
             if showing_me or self.speed_now or self.last_speed < 0:
                 self.speed_now = False
                 self.last_speed = now
                 self.t_speed.text = "testing..."
-                safe(self.speed_test, "speed test")
+                if not safe(self.speed_test, "speed test"):
+                    self.t_speed.text = "failed"
+                    self.speed_ok = False
         if net_state == "ok" and showing_me and now - self.last_upnp > 600 and self.upnp_tries < 3:
             self.last_upnp = now
             try:
                 self.upnp()
             except Exception as e:  # noqa: BLE001 - many routers have UPnP switched off
-                print("router uptime (UPnP):", repr(e))
+                self.upnp_log = "router uptime (UPnP): %r" % e
+                print(self.upnp_log)
                 self.upnp_tries += 1
                 if not self.router_up:
                     self.t_rup.text = "n/a"
@@ -1835,17 +1847,48 @@ class NetScreen(Screen):
     def boot(self, now):
         self.speed_now = True               # BOOT on this screen: run a speed test now
 
-    def speed_test(self):
+    def _download(self, url):
+        """Bytes received and seconds taken (up to 1 MB or 8 s, timed from the first byte)."""
         n = 0
-        t0 = time.monotonic()
-        with requests.get(SPEED_URL, timeout=NET_TIMEOUT) as r:
+        with requests.get(url, headers=SPEED_HDR, timeout=NET_TIMEOUT) as r:
+            if r.status_code != 200:
+                raise RuntimeError("HTTP %s" % r.status_code)
+            t0 = time.monotonic()
             for chunk in r.iter_content(chunk_size=4096):
                 n += len(chunk)
                 dog()
-        secs = max(0.001, time.monotonic() - t0)
-        mbps = n * 8 / secs / 1e6
-        self.t_speed.text = ("%.1f Mbps" % mbps if mbps < 100 else "%d Mbps" % mbps) if n > 10000 \
-            else "failed"
+                if n >= 1000000 or time.monotonic() - t0 > 8:
+                    break
+            secs = time.monotonic() - t0
+        free_sockets()                  # a half-read connection must never be reused
+        return n, max(0.001, secs)
+
+    def speed_test(self):
+        tried = []
+        for url in SPEED_URLS:
+            host = url.split("/")[2]
+            self.t_speed.text = "testing..."
+            try:
+                n, secs = self._download(url)
+            except Exception as e:  # noqa: BLE001 - try the next server
+                free_sockets()
+                tried.append("%s: %r" % (host, e))
+                continue
+            if n < 100000:
+                tried.append("%s: only %d bytes" % (host, n))
+                continue
+            mbps = n * 8 / secs / 1e6
+            self.t_speed.text = "%.1f Mbps" % mbps if mbps < 100 else "%d Mbps" % mbps
+            self.speed_ok = True
+            t = time.localtime()
+            self.speed_log = "%02d:%02d  %s: %d KB in %.1f s = %.2f Mbps%s" % (
+                t.tm_hour, t.tm_min, host, n // 1024, secs, mbps,
+                ("  (failed first: %s)" % "; ".join(tried)) if tried else "")
+            return
+        self.speed_ok = False
+        self.t_speed.text = "failed"
+        self.speed_log = "all servers failed: " + "; ".join(tried)
+        log_err("speed test: " + "; ".join(tried))
 
     def upnp(self):
         """Ask the router how long its internet link has been up (UPnP GetStatusInfo)."""
@@ -1891,6 +1934,7 @@ class NetScreen(Screen):
         up = int(xml[a + 11:xml.find("</NewUptime>")].strip())
         self.router_up = (up, time.monotonic())
         self.upnp_tries = 0
+        self.upnp_log = "router answered: up %s (%s)" % (_ago(up), url)
 
 
 net_screen = NetScreen()
@@ -3615,6 +3659,17 @@ def _net_error(e):
     return "timeout" in n or "connection" in n or "gaierror" in n
 
 
+ERRLOG = []                 # recent problems, shown on http://<board>:8080/debug
+
+
+def log_err(msg):
+    t = time.localtime()
+    line = "%02d:%02d:%02d %s" % (t.tm_hour, t.tm_min, t.tm_sec, msg)
+    print(line)
+    ERRLOG.append(line[:300])
+    del ERRLOG[:-30]
+
+
 def safe(fn, name, free=True):
     global fail_streak, need_probe
     if net_state != "ok":       # offline: skip instead of freezing on a doomed request
@@ -3625,7 +3680,7 @@ def safe(fn, name, free=True):
         fail_streak = 0
         return True
     except Exception as e:  # noqa: BLE001 - keep the dashboard running
-        print(name, "failed:", repr(e))
+        log_err("%s failed: %r" % (name, e))
         free_sockets()          # a broken connection: start fresh next time
         if _net_error(e):
             fail_streak += 1
@@ -3833,7 +3888,8 @@ def home(request: Request):
                         '<p style="margin-top:16px"><a href="/theme" style="background:#444">'
                         'Look: %s (change)</a></p>'
                         '<p style="margin-top:16px"><a href="/pet" style="background:#444">Pet</a> '
-                        '<a href="/stat/debug" style="background:#444">Stat feed</a></p></body>'
+                        '<a href="/stat/debug" style="background:#444">Stat feed</a> '
+                        '<a href="/debug" style="background:#444">Debug</a></p></body>'
                         % (0 if auto_rotate else 1, "ON" if auto_rotate else "OFF",
                            "off" if auto_rotate else "on", THEME.upper()))
     return Response(request, body, content_type="text/html")
@@ -3894,6 +3950,32 @@ def pet_page(request: Request):
     return Response(request, PAGE.replace("Zerodha login", PET_NAME) %
                     (msg, '<a href="/pet?feed=1">Feed %s</a> &nbsp; <a href="/" '
                           'style="background:#444">Back</a>' % PET_NAME),
+                    content_type="text/html")
+
+
+@server.route("/debug")
+def debug_page(request: Request):
+    import gc
+    gc.collect()
+    try:
+        rssi = wifi.radio.ap_info.rssi
+    except Exception:  # noqa: BLE001
+        rssi = "?"
+    info = [
+        "Board: %s:%d, Wi-Fi %s dBm, network %s, up %s, free memory %d KB" % (
+            MY_IP, LOGIN_PORT, rssi, net_state, _ago(time.monotonic()),
+            getattr(gc, "mem_free", lambda: 0)() // 1024),
+        "Speed test: " + net_screen.speed_log,
+        "Router uptime: " + net_screen.upnp_log,
+        "Stat of the day: " + stat_screen.debug.replace("\n", " | ")[:400],
+        "",
+        "Recent problems (newest last):",
+    ] + (ERRLOG or ["none"])
+    return Response(request, PAGE.replace("Zerodha login", "Debug") %
+                    ("Send a screenshot of this page if something isn't working.",
+                     "<pre style='white-space:pre-wrap;font-size:12px'>%s</pre>"
+                     '<p><a href="/debug">Refresh</a> &nbsp; <a href="/" style="background:#444">Back</a></p>'
+                     % esc("\n".join(info))),
                     content_type="text/html")
 
 
@@ -4048,7 +4130,7 @@ def settings_html(msg=""):
                % (esc(PET_NAME), esc(PING_HOST)))
     out.append('<button name=go value=save>Save</button><button name=go value=restart>Save and restart</button>'
                '</form><h3>Reset</h3><p><a href="/settings/reset">Forget everything set here and use '
-               'settings.toml again</a></p>')
+               'settings.toml again</a></p><p><a href="/debug">Debug info (recent errors)</a></p>')
     return SET_PAGE % "".join(out)
 
 
@@ -4574,7 +4656,7 @@ while True:
         microcontroller.reset()
     except Exception as e:  # noqa: BLE001 - one bad update must not kill the dashboard
         t_err = time.monotonic()
-        print("loop error:", repr(e))
+        log_err("loop error: %r" % e)
         loop_errors = [x for x in loop_errors if t_err - x < 60] + [t_err]
         if len(loop_errors) > 10:            # failing over and over: start clean
             print("too many errors - restarting")
