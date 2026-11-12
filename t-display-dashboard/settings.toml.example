@@ -28,7 +28,8 @@ FMP_API_KEY = ""
 # --- Cricket ---
 # CRICKET_SOURCE = "rss"      # "rss" = ESPNcricinfo feed (default, no key) or "cricapi"
 # CRICKET_API_KEY = ""        # only for CRICKET_SOURCE = "cricapi" (cricketdata.org)
-# CRICKET_TEAM = "India"      # auto-pick this team's live match
+# CRICKET_TEAM = "India"      # follow this team's live matches (several: "India, Mumbai Indians")
+# CRICKET_MATCH_SECONDS = "8" # seconds per match when following several (pick them at /cricket)
 # CRICKET_EVERY = "30"
 
 # --- News ---

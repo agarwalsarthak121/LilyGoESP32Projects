@@ -94,6 +94,14 @@ def client():
     print("after up/del:", NS["stocks_screen"].picks, "| saved:", NS["CFG"].get("STOCK_PICKS"))
     NS["stocks_screen"].draw()
     print("stock rows:", [(r[3].text, r[9].text, r[4].text, r[5].text) for r in NS["stocks_screen"].rows if r[3].text])
+    # CRICKET TEST: follow two matches by tapping the page's own links, then stop one
+    page = urllib.request.urlopen("http://127.0.0.1:8080/cricket", timeout=8).read().decode()
+    for href in _re.findall(r'href="(/cricket\?id=[^"]*)"', page)[:2]:
+        if "off" not in href:
+            urllib.request.urlopen("http://127.0.0.1:8080" + href, timeout=8).read()
+    print("following:", NS["cric_ids"], "| board shows:", NS["cric_id"], NS["lbl_cpage"].text)
+    urllib.request.urlopen("http://127.0.0.1:8080/cricket?del=" + NS["cric_ids"][0], timeout=8).read()
+    print("after stop:", NS["cric_ids"], "| saved:", NS["CFG"].get("CRICKET_MATCHES"))
     # THEME TEST: choosing a look saves it to NVM and asks for a restart
     r = urllib.request.urlopen("http://127.0.0.1:8080/theme?name=classic", timeout=4).read().decode()
     print("theme page:", r.split("<p>")[1][:60] if "<p>" in r else r[:80], "| nvm[0] =", NS["microcontroller"].nvm[0] if "microcontroller" in NS else "?")
