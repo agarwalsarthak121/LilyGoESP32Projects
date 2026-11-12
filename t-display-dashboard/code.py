@@ -3846,7 +3846,7 @@ def cric_render():
     m = cric_items.get(cric_id)
     if m is None and CRIC_CB and cric_id not in cric_gone:
         err = cb_err.get(cric_id)
-        lbl_cname.text = ("Cricbuzz said %s - retrying" % err) if err else "Loading the score from Cricbuzz..."
+        lbl_cname.text = ("Cricbuzz: %s - retrying" % err) if err else "Loading the score from Cricbuzz..."
         if err:
             cric_ticker.set("#Couldn't read the score from Cricbuzz (%s) - retrying  #Details: http://%s:%d/cricket/debug"
                             % (err, MY_IP, LOGIN_PORT))
@@ -4152,7 +4152,11 @@ def get_cricket_detail(item):
 # Each followed match is read from the JSON behind Cricbuzz's own match page:
 # score, overs, both batters, the bowler, run rates, recent balls, status.
 # The list of matches to pick from comes from the links on its live-scores page.
-CB_MATCH_URL = "https://www.cricbuzz.com/api/cricket-match/commentary/%s"
+# match data: the newer mcenter addresses first ("hcomm" serves some leagues "comm" doesn't);
+# the old commentary address now often answers with the web page instead of data
+CB_MATCH_URLS = ("https://www.cricbuzz.com/api/mcenter/comm/%s",
+                 "https://www.cricbuzz.com/api/mcenter/hcomm/%s",
+                 "https://www.cricbuzz.com/api/cricket-match/commentary/%s")
 CB_LIST_URL = "https://www.cricbuzz.com/cricket-match/live-scores"
 CB_HDR = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                         "(KHTML, like Gecko) Chrome/130.0 Safari/537.36",
@@ -4268,11 +4272,53 @@ def _cb_bat(b):
     return "%s %s(%s)" % (b["batName"].split()[-1], b.get("batRuns", 0), b.get("batBalls", 0))
 
 
-def cb_parse(mid, body):
-    """The bits of Cricbuzz's match JSON the screen needs."""
+def _cb_json(url):
+    """Read one Cricbuzz data address in small pieces and pull out its "matchHeader" and
+    "miniscore" objects (as text), stopping as soon as both are in - the long commentary
+    list that comes with them is never kept. Anything that isn't JSON isn't read at all."""
+    want = {'"matchHeader":': None, '"miniscore":': None}
+    buf, size, first = "", 0, ""
+    with requests.get(url, headers=CB_HDR, timeout=NET_TIMEOUT) as r:
+        status = r.status_code
+        ctype = (r.headers.get("content-type") or "").lower()
+        if status != 200 or "json" not in ctype:
+            return status, ctype, None, None, 0, ""
+        for chunk in r.iter_content(chunk_size=4096):
+            size += len(chunk)
+            buf += _text(chunk)
+            if not first:
+                first = buf[:120]
+            keep = len(buf) - 40                     # a key cut in two waits for the next piece
+            for key in want:
+                if want[key] is not None:
+                    continue
+                at = buf.find(key)
+                if at < 0:
+                    continue
+                j = at + len(key)
+                while j < len(buf) and buf[j] in " \r\n\t":
+                    j += 1
+                if j < len(buf) and buf[j] not in "{[":
+                    want[key] = "{}"                 # null: not there for this match
+                    continue
+                obj = _balanced(buf, key, at)
+                if obj is not None:
+                    want[key] = obj
+                elif len(buf) - at > 150000:
+                    want[key] = "{}"                 # far too big: give up on it
+                else:
+                    keep = min(keep, at)             # not finished yet: keep it
+            if (want['"matchHeader":'] is not None and want['"miniscore":'] is not None) or size > 1500000:
+                break
+            buf = buf[max(0, keep):]
+    return status, ctype, want['"matchHeader":'], want['"miniscore":'], size, first
+
+
+def cb_parse(mid, head_txt, mini_txt):
+    """The bits of Cricbuzz's match data the screen needs."""
     import json
-    head = json.loads(_balanced(body, '"matchHeader":') or "{}")
-    mini = json.loads(_balanced(body, '"miniscore":') or "{}")
+    head = json.loads(head_txt or "{}") or {}
+    mini = json.loads(mini_txt or "{}") or {}
     teams = []
     for k in ("team1", "team2"):
         t = head.get(k) or {}
@@ -4286,6 +4332,11 @@ def cb_parse(mid, body):
         inns.append((s.get("inningsId", 0), s.get("batTeamId"), txt, _cb_overs(s.get("overs"))))
     inns.sort(key=lambda x: x[0] or 0)
     bat = (mini.get("batTeam") or {}).get("teamId")
+    if not inns and bat is not None and (mini.get("batTeam") or {}).get("teamScore") is not None:
+        bt = mini["batTeam"]
+        w = bt.get("teamWkts", 0) or 0
+        inns.append((mini.get("inningsId", 1), bat, ("%s" % bt["teamScore"]) if w >= 10 else
+                     "%s/%s" % (bt["teamScore"], w), _cb_overs(mini.get("overs"))))
     striker = _cb_bat(mini.get("batsmanStriker"))
     other = _cb_bat(mini.get("batsmanNonStriker"))
     batters = "   ".join([p for p in (striker.replace("(", "*(", 1) if striker else "", other) if p])
@@ -4308,23 +4359,36 @@ def cb_parse(mid, body):
 
 
 cb_err = {}             # id -> why the last Cricbuzz read failed
+cb_src = {}             # id -> which of CB_MATCH_URLS last had its data
 
 
 def cb_fetch(mid):
     """Read one followed match from Cricbuzz and redraw."""
     now = time.monotonic()
     cric_detail_at[mid] = now                      # tried now, even if it fails
-    url = CB_MATCH_URL % mid
-    status, body = _cb_get(url, 400000)
+    order = list(range(len(CB_MATCH_URLS)))
+    if mid in cb_src:                              # the address that worked last time first
+        order.remove(cb_src[mid])
+        order.insert(0, cb_src[mid])
+    tried, d, why = [], None, ""
+    for k in order:
+        url = CB_MATCH_URLS[k] % mid
+        status, ctype, head_t, mini_t, size, first = _cb_json(url)
+        note = {"url": url, "status": status, "type": ctype, "bytes": size, "start": first,
+                "matchHeader": bool(head_t and head_t != "{}"), "miniscore": bool(mini_t and mini_t != "{}")}
+        tried.append(note)
+        if head_t and head_t != "{}":
+            try:
+                d = cb_parse(mid, head_t, mini_t)
+            except Exception as e:  # noqa: BLE001
+                note["parse_error"] = repr(e)
+            if d:
+                cb_src[mid] = k
+                break
+        why = ("HTTP %d" % status) if status != 200 else ("a web page, not data" if "json" not in ctype
+                                                           else "no score in the reply")
     cric_debug.clear()
-    cric_debug.update({"url": url, "status": status, "bytes": len(body)})
-    d = None
-    if status == 200 and body:
-        try:
-            d = cb_parse(mid, body)
-        except Exception as e:  # noqa: BLE001
-            cric_debug["parse_error"] = repr(e)
-    del body
+    cric_debug["tried"] = tried
     cb_err.pop(mid, None)
     if d:
         cric_items[mid] = d
@@ -4333,18 +4397,16 @@ def cb_fetch(mid):
             cric_gone.setdefault(mid, now)
         else:
             cric_gone.pop(mid, None)
-    elif status in (200, 204):  # Cricbuzz has nothing for this id: give up after a while
-        cric_gone.setdefault(mid, now)
-    else:                       # blocked or down: keep the match, say why, retry
-        cb_err[mid] = "HTTP %d" % status
+    else:                       # blocked, down or changed: keep the match, say why, retry
+        cb_err[mid] = why or "no answer"
     if now - cric_gone.get(mid, now) > CRIC_GONE_SECS and mid in cric_ids:
         cric_ids.remove(mid)
         for dct in (cric_details, cric_detail_at, cric_gone, cric_items):
             dct.pop(mid, None)
         cric_save()
     cric_render()
-    if not d and status != 200:
-        raise RuntimeError("Cricbuzz match %s: HTTP %d" % (mid, status))
+    if not d:
+        raise RuntimeError("Cricbuzz match %s: %s" % (mid, cb_err[mid]))
 
 
 def cb_due(now, on_screen):
@@ -4356,7 +4418,9 @@ def cb_due(now, on_screen):
     for mid in cric_ids:
         d = cric_items.get(mid)
         age = now - cric_detail_at.get(mid, -1e9)
-        if d and d["matchEnded"]:
+        if mid in cb_err:
+            need = 45
+        elif d and d["matchEnded"]:
             need = 600
         elif d and not d["started"]:
             need = 300

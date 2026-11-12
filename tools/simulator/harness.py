@@ -60,7 +60,7 @@ sys.modules["rtc"] = rtcm
 
 FAIL = os.environ.get("FAIL") == "1"
 class Resp:
-    def __init__(self, d, raw=None): self.d = d; self.raw = raw; self.status_code = 200
+    def __init__(self, d, raw=None, headers=None): self.d = d; self.raw = raw; self.status_code = 200; self.headers = headers or {}
     def iter_content(self, chunk_size=1024):
         for i in range(0, len(self.raw), chunk_size):
             yield self.raw[i:i + chunk_size]
@@ -215,6 +215,10 @@ class Session:
                         '<a href="/live-cricket-scores/171301/ind-vs-sa-2nd-test">again</a></body></html>')
                 return Resp(None, html.encode())
             mid = url.rstrip("/").split("/")[-1]
+            if "/api/cricket-match/commentary/" in url:     # like now: the web page, not data
+                return Resp(None, (b"<!DOCTYPE html><html>" + b"x" * 401000), {"content-type": "text/html; charset=utf-8"})
+            if "/mcenter/comm/" in url and mid == "171450":   # served by hcomm only (like The Hundred)
+                return Resp(None, b'{"matchHeader":null,"miniscore":null,"commentaryList":[]}', {"content-type": "application/json"})
             def team(i, n, s): return {"id": i, "name": n, "shortName": s}
             if mid == "171301":
                 head = {"matchId": 171301, "matchDescription": "2nd Test", "matchFormat": "TEST", "state": "In Progress",
@@ -241,11 +245,10 @@ class Session:
                 mini = None
             else:
                 r = Resp(None, b""); r.status_code = 204; return r
-            body = {"commentaryList": [{"commText": "filler ball %d " % k + "x" * 300, "ballNbr": k} for k in range(150)],
+            body = {"commentaryList": [{"commText": "filler ball %d " % k + "x" * 300, "ballNbr": k} for k in range(900)],
                     "matchHeader": head, "page": "commentary"}
-            if mini is not None:
-                body["miniscore"] = mini
-            return Resp(None, _j.dumps(body).encode())
+            body["miniscore"] = mini
+            return Resp(None, _j.dumps(body).encode(), {"content-type": "application/json; charset=utf-8"})
         if "cricinfo" in url:
             print("RSS GET", headers.get("User-Agent","")[:20] if headers else None)
             xml = """<?xml version="1.0"?><rss version="2.0"><channel><title>Cricinfo Live Scores</title>
