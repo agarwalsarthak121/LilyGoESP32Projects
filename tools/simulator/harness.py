@@ -79,6 +79,16 @@ HOLD = [
  {"tradingsymbol":"BAJAJ-AUTO","quantity":4,"t1_quantity":0,"average_price":9100.0,"last_price":8875.0,"close_price":8875.0},
  {"tradingsymbol":"ICICIPRULI","quantity":120,"t1_quantity":0,"average_price":560.0,"last_price":612.35,"close_price":604.1},
 ]
+POS = [   # net positions: an overnight option, an intraday short, today's delivery buy, a closed scalp
+ {"tradingsymbol":"NIFTY25NOV24000CE","product":"NRML","quantity":75,"multiplier":1,"average_price":182.5,"last_price":214.35,"close_price":196.1,
+  "buy_value":13687.5,"sell_value":0,"buy_m2m":14707.5,"sell_m2m":0,"pnl":0,"m2m":0},
+ {"tradingsymbol":"TATAMOTORS","product":"MIS","quantity":-50,"multiplier":1,"average_price":725.0,"last_price":712.3,"close_price":728.9,
+  "buy_value":0,"sell_value":36250,"buy_m2m":0,"sell_m2m":36250},
+ {"tradingsymbol":"ITC","product":"CNC","quantity":100,"multiplier":1,"average_price":412.0,"last_price":409.15,"close_price":405.2,
+  "buy_value":41200,"sell_value":0,"buy_m2m":41200,"sell_m2m":0},
+ {"tradingsymbol":"SBIN","product":"MIS","quantity":0,"multiplier":1,"average_price":0,"last_price":801.2,"close_price":795.0,
+  "buy_value":80000,"sell_value":80650,"buy_m2m":80000,"sell_m2m":80650},
+]
 KITE_EXPIRED = os.environ.get("KITE_EXPIRED") == "1"
 class Session:
     def __init__(self, *a): pass
@@ -138,6 +148,10 @@ class Session:
             print("GET", url, headers["Authorization"])
             if KITE_EXPIRED:
                 r = Resp({"status":"error","error_type":"TokenException","message":"expired"}); r.status_code=403; return r
+            if "positions" in url:
+                if os.environ.get("POS_FAIL") == "1":
+                    raise OSError(104, "ECONNRESET")
+                r = Resp({"status":"success","data":{"net":POS if os.environ.get("NO_POS") != "1" else [],"day":[]}}); r.status_code=200; return r
             r = Resp({"status":"success","data":HOLD}); r.status_code=200; return r
         if "news.google.com" in url or "thehindu.com" in url or "indiatimes.com" in url:
             host = url.split("/")[2]

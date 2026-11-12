@@ -80,8 +80,11 @@ def client():
     print("screen text:", [row[4].text for row in NS["todo_screen"].rows if row[4].text])
     # STOCKS TEST: pick stocks over real HTTP by following the page's own links (M&M needs %26)
     import re as _re
-    NS["stocks_screen"].update([("M&M", 15, 2650.0, 3120.5, 3098.0), ("RELIANCE", 20, 2450.0, 2912.4, 2880.1),
-                                ("BAJAJ-AUTO", 4, 9100.0, 8875.0, 8875.0)])
+    NS["stocks_screen"].update([("M&M", "M&M", "", 15, 2650.0, 3120.5, 3098.0, 7057.5, 17.8, 337.5),
+                                ("RELIANCE", "RELIANCE", "", 20, 2450.0, 2912.4, 2880.1, 9248.0, 18.9, 646.0),
+                                ("BAJAJ-AUTO", "BAJAJ-AUTO", "", 4, 9100.0, 8875.0, 8875.0, -900.0, -2.5, 0.0),
+                                ("NIFTY25NOV24000CE:NRML", "NIFTY25NOV24000CE", "NRML", 75, 182.5, 214.35, 196.1,
+                                 2388.75, 17.5, 1368.75)])
     page = urllib.request.urlopen("http://127.0.0.1:8080/stocks", timeout=4).read().decode()
     for href in _re.findall(r'href="(/stocks/do\?op=add[^"]*)"', page):
         urllib.request.urlopen("http://127.0.0.1:8080" + href.replace("&amp;", "&"), timeout=4).read()
@@ -90,7 +93,7 @@ def client():
     urllib.request.urlopen("http://127.0.0.1:8080/stocks/do?op=del&s=bajaj-auto", timeout=4).read()
     print("after up/del:", NS["stocks_screen"].picks, "| saved:", NS["CFG"].get("STOCK_PICKS"))
     NS["stocks_screen"].draw()
-    print("stock rows:", [(r[3].text, r[4].text, r[5].text) for r in NS["stocks_screen"].rows if r[3].text])
+    print("stock rows:", [(r[3].text, r[9].text, r[4].text, r[5].text) for r in NS["stocks_screen"].rows if r[3].text])
     # THEME TEST: choosing a look saves it to NVM and asks for a restart
     r = urllib.request.urlopen("http://127.0.0.1:8080/theme?name=classic", timeout=4).read().decode()
     print("theme page:", r.split("<p>")[1][:60] if "<p>" in r else r[:80], "| nvm[0] =", NS["microcontroller"].nvm[0] if "microcontroller" in NS else "?")

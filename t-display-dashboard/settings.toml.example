@@ -19,7 +19,8 @@ WEATHER_LON = "78.13"
 KITE_API_KEY = ""
 KITE_API_SECRET = ""
 # KITE_EVERY = "5"            # seconds between refreshes while Portfolio or My stocks is up in market hours
-# STOCK_PICKS = "RELIANCE,INFY,M&M"   # holdings for the My stocks screen (easier: pick them at /stocks)
+# STOCK_PICKS = "RELIANCE,M&M,NIFTY25NOV24000CE:NRML"   # My stocks: holdings, and positions as SYMBOL:PRODUCT
+#                             # (easier: pick them at /stocks)
 
 # --- Markets screen (US indices; free key from financialmodelingprep.com) ---
 FMP_API_KEY = ""
