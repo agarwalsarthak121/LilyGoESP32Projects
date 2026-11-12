@@ -18,7 +18,8 @@ WEATHER_LON = "78.13"
 # --- Zerodha portfolio (Kite Connect Personal, free) ---
 KITE_API_KEY = ""
 KITE_API_SECRET = ""
-# KITE_EVERY = "5"            # seconds between refreshes while the portfolio screen is up in market hours
+# KITE_EVERY = "5"            # seconds between refreshes while Portfolio or My stocks is up in market hours
+# STOCK_PICKS = "RELIANCE,INFY,M&M"   # holdings for the My stocks screen (easier: pick them at /stocks)
 
 # --- Markets screen (US indices; free key from financialmodelingprep.com) ---
 FMP_API_KEY = ""
@@ -40,7 +41,7 @@ FMP_API_KEY = ""
 #                             # the board's web page /theme can switch it too
 
 # --- Screens and rotation ---
-# SCREEN_ORDER = "weather,todo,portfolio,heatmap,markets,cricket,stat,news,trivia,net,pet"
+# SCREEN_ORDER = "weather,todo,portfolio,stocks,heatmap,markets,cricket,stat,news,trivia,net,pet"
 #                             # also available: clock, matrix, fire, stars
 # SCREEN_SECONDS = "15"
 # AUTO_ROTATE = "off"         # screens then change only with the KEY button

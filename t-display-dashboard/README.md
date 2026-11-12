@@ -20,6 +20,7 @@ A Wi-Fi desk dashboard for the **LilyGO T-Display-S3** (ESP32-S3, 1.9" 320×170 
 | **Cricket** | Live score for a match you pick: teams, score, overs, current batters | ESPNcricinfo live-scores RSS (every 30 s) + match details |
 | **News** | Top 10 India headlines, one at a time in large text, with source and a progress bar | Google News India RSS (falls back to The Hindu, then Times of India) |
 | **To-do** | Your task list: due dates (overdue in red), high-priority marks, ticked-off tasks | Managed at `/todo` on your phone, kept on the board |
+| **My stocks** | The holdings you pick: price (LTP), today's move (▲/▼ in ₹ and %) and your P&L (₹ and %), five per page | Kite holdings; picked at `/stocks` on your phone |
 | **Holdings heatmap** | A tile per stock, sized by value, coloured by today's move | Kite holdings |
 | **Stat of the day** | A player's international numbers this year plus career line; a cricket fact when offline | ESPNcricinfo Statsguru |
 | **Trivia** | An India quiz question; the answer lights up after 30 s | `trivia_india.txt` on the board (241 questions, add your own) |
@@ -64,12 +65,13 @@ The original grey look:
 | | |
 |---|---|
 | ![To-do](docs/extra-todo.png) | ![Holdings heatmap](docs/extra-heat.png) |
-| ![Stat of the day](docs/extra-stat.png) | |
+| ![My stocks](docs/extra-stocks.png) | ![Stat of the day](docs/extra-stat.png) |
 | ![Trivia](docs/extra-trivia.png) | ![Internet health](docs/extra-net.png) |
 | ![Pet](docs/extra-pet.png) | ![Matrix rain](docs/extra-matrix.png) |
 | ![Fire](docs/extra-fire.png) | ![Starfield](docs/extra-stars.png) |
 
 - **To-do:** open `http://<board-ip>:8080/todo` to add tasks (with an optional due date and high priority), tick them off, edit, reorder, sort by priority and due date, and clear done ones. The board shows five at a time and pages through the rest every 6 seconds (BOOT for the next page). Due dates read "Today", "Tomorrow", a weekday, a date, or "3d late" in red. The list is kept on the board (NVM). Phone shortcuts can add tasks with `/todo/add?t=Buy+milk` (optional `&p=1` for high priority, `&d=2026-11-20` for a due date), and `/todo.json` returns the list. The screen font is English letters only, so other scripts show as "?" on the board (they're kept on the web page).
+- **My stocks:** open `http://<board-ip>:8080/stocks` (or "My stocks" on the home page) and tap **+ Add** next to the holdings you want; ▲ ▼ reorder them, ✕ removes one, and there's Add all, Sort A-Z and Remove all. Each row on the board shows the symbol with your quantity and average price, the LTP with today's change per share and %, and your total P&L in ₹ and %. A green ▲ means the stock is up today, a red ▼ down, a grey bar unchanged; the header adds up today's ₹ move across your picks. Five stocks fit on a page; with more, the board flips pages every 6 seconds (BOOT for the next page) and stays on the screen long enough to show them all. Prices refresh every `KITE_EVERY` seconds (5) while this screen is up in market hours. Picking your first stock turns the screen on (after Portfolio) if it was off. The picks are kept on the board (up to 30), survive restarts and the Settings reset, and can also be set as `STOCK_PICKS` in `settings.toml`. Skipped in the rotation until you log in to Kite.
 - **Holdings heatmap:** a squarified treemap of your Kite holdings (up to 16 tiles; the rest fold into "+N MORE"). Skipped in the rotation until you log in.
 - **Stat of the day:** one player per day from `STAT_PLAYERS` (Cricinfo player ids). Shows this year's runs or wickets, five key numbers and the career line, refreshed every 6 hours. If Statsguru can't be read it shows a cricket fact instead; `/stat/debug` on the board's web page shows what it got.
 - **Trivia:** 241 India questions in `trivia_india.txt` — history, geography, polity, science and ISRO, sports, culture, cinema, food, economy and Uttar Pradesh — shuffled so none repeats until all have been asked. Add your own as `CATEGORY|Question|Right answer|Wrong|Wrong|Wrong` lines. The bar counts down, then the right answer turns green for 8 seconds; the screen stays up for the whole question when auto-rotating. `TRIVIA_SOURCE = "world"` switches to Open Trivia DB (mostly US/UK questions) and `"mix"` alternates.
@@ -80,7 +82,7 @@ The original grey look:
 ## Buttons
 
 - **KEY** (GPIO14): next screen. At night it wakes the other screens for 60 seconds.
-- **BOOT** (GPIO0) does something on some screens: next page (To-do), next headline (News), reveal the answer, then next question (Trivia), next player (Stat), feed (Pet), run a speed test now (Internet).
+- **BOOT** (GPIO0) does something on some screens: next page (To-do, My stocks), next headline (News), reveal the answer, then next question (Trivia), next player (Stat), feed (Pet), run a speed test now (Internet).
 
 ## Install
 
@@ -97,6 +99,7 @@ Open `http://<board-ip>:8080` on a phone or laptop on the same Wi-Fi:
 |---|---|
 | `/` | Kite login link, paste-the-redirect-URL form, links to everything below |
 | `/todo` | Add, tick off, edit, reorder and clear to-do tasks |
+| `/stocks` | Pick the holdings for the My stocks screen, reorder or remove them; shows each one's LTP, today's move and P&L |
 | `/settings` | **Settings**: turn screens on/off, reorder them, jump to one; auto-rotate and seconds per screen; night mode on/off, hours, night screen and brightness; theme and day brightness; news, trivia, cricket, weather town, pet name, ping host |
 | `/kite` | Where the Kite login lands (via the https redirect page) |
 | `/cricket` | Pick which live match to follow, or turn cricket off |
@@ -124,7 +127,8 @@ Most settings can be changed from your phone at `http://<board-ip>:8080/settings
 | Key | Default | Meaning |
 |---|---|---|
 | `THEME` | `aura` | `aura` (a different style per screen) or `classic` (the original grey look) |
-| `SCREEN_ORDER` | `weather,todo,portfolio,heatmap,markets,cricket,stat,news,trivia,net,pet` | Which screens rotate, in order (also available: `clock`, `matrix`, `fire`, `stars`) |
+| `SCREEN_ORDER` | `weather,todo,portfolio,stocks,heatmap,markets,cricket,stat,news,trivia,net,pet` | Which screens rotate, in order (also available: `clock`, `matrix`, `fire`, `stars`) |
+| `STOCK_PICKS` | (none) | Holdings for My stocks, comma separated Kite symbols (`RELIANCE,INFY,M&M`); easier to pick at `/stocks` |
 | `NIGHT_SCREEN` | `clock` | What shows at night: `clock`, `matrix`, `fire`, `stars` or `cycle` |
 | `STAT_PLAYERS` | Kohli, Rohit, Bumrah, Gill | `id:Name` or `id:Name:bowl`, comma separated (the id is in the player's Cricinfo URL) |
 | `STAT_CLASS` | `11` | `11` all internationals, `1` Tests, `2` ODIs, `3` T20Is |

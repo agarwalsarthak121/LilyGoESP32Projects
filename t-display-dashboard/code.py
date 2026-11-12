@@ -137,7 +137,7 @@ CLASSIC = THEME == "classic"
 WEATHER_EVERY = 10 * 60
 AIR_EVERY = 30 * 60
 NTP_EVERY = 6 * 60 * 60
-KITE_EVERY_FAST = int(os.getenv("KITE_EVERY") or "5")   # market hours, portfolio on screen
+KITE_EVERY_FAST = int(os.getenv("KITE_EVERY") or "5")   # market hours, portfolio or My stocks on screen
 KITE_EVERY_OPEN = 60          # market hours, other screens showing
 KITE_EVERY_CLOSED = 15 * 60   # outside market hours
 
@@ -2696,6 +2696,208 @@ todo_screen = TodoScreen()
 EXTRA["todo"] = todo_screen
 
 
+# ------------------------------------------------------------- my stocks
+# Holdings you pick at http://<board>:8080/stocks: price (LTP), today's move and
+# your P&L, five to a page (more go on page 2, 3...).  The picks are saved as
+# STOCK_PICKS, which can also be set in settings.toml ("RELIANCE,INFY,M&M").
+STOCK_ROWS = 5
+STOCK_PAGE_SECONDS = 6
+STOCK_MAX = 30
+
+
+def stock_picks(text_=None):
+    out = []
+    for s in ((cfg("STOCK_PICKS") if text_ is None else text_) or "").upper().split(","):
+        s = s.strip()
+        if s and s not in out:
+            out.append(s)
+    return out[:STOCK_MAX]
+
+
+def group_in(n):
+    """1234567 -> '12,34,567' (Indian digit grouping, whole number)."""
+    s = "%d" % n
+    if len(s) <= 3:
+        return s
+    head, tail = s[:-3], s[-3:]
+    parts = []
+    while len(head) > 2:
+        parts.insert(0, head[-2:])
+        head = head[:-2]
+    if head:
+        parts.insert(0, head)
+    return ",".join(parts) + "," + tail
+
+
+def price(v, signed=False):
+    """2912.4 -> '2,912.40'.  Whole rupees from 1 lakh up (and for moves of 1,000+)."""
+    sign = ("+" if v >= 0 else "-") if signed else ("-" if v < 0 else "")
+    a = abs(v)
+    if a >= (1000 if signed else 1e5):
+        return sign + group_in(int(a + 0.5))
+    paise = int(a * 100 + 0.5)
+    return "%s%s.%02d" % (sign, group_in(paise // 100), paise % 100)
+
+
+def _fit(font, t, room):
+    """Cut `t` (adding '..') until it fits `room` pixels."""
+    if px_width(font, t) <= room:
+        return t
+    while t and px_width(font, t + "..") > room:
+        t = t[:-1]
+    return t + ".."
+
+
+def _set(lbl, t, colour=None):
+    if lbl.text != t:
+        lbl.text = t
+    if colour is not None and lbl.color != colour:
+        lbl.color = colour
+
+
+class StocksScreen(Screen):
+    MID = 206                       # right edge of the price column
+
+    def __init__(self):
+        global root
+        Screen.__init__(self)
+        root = self.grp
+        self.sub, self.clock = _head("MY STOCKS", 0x387ED1)
+        self.pg = text(F_SMALL, "", 262, 8, 0x8A9099, right=True)
+        self.rows = []
+        for i in range(STOCK_ROWS):
+            y = 29 + i * 27
+            shapes = []
+            for colour, pts, dy in ((GREEN, [(0, 8), (5, 0), (10, 8)], 3),     # up
+                                    (RED, [(0, 0), (10, 0), (5, 8)], 3)):     # down
+                p = displayio.Palette(1)
+                p[0] = colour
+                shapes.append(vectorio.Polygon(pixel_shader=p, x=3, y=y + dy, points=pts))
+            fp = displayio.Palette(1)
+            fp[0] = 0x6A727B
+            shapes.append(vectorio.Rectangle(pixel_shader=fp, x=3, y=y + 6, width=10, height=3))
+            for s in shapes:
+                s.hidden = True
+                root.append(s)
+            sep = vectorio.Rectangle(pixel_shader=pal, width=296, height=1, x=18, y=y - 2,
+                                     color_index=10)
+            sep.hidden = True
+            if i:
+                root.append(sep)
+            self.rows.append(shapes + [
+                text(F_MED, "", 18, y - 5, WHITE),                      # symbol
+                text(F_MED, "", self.MID, y - 5, WHITE, right=True),    # price
+                text(F_MED, "", 314, y - 5, WHITE, right=True),         # P&L
+                text(F_SMALL, "", 18, y + 13, 0x8A9099),                # qty @ avg
+                text(F_SMALL, "", self.MID, y + 13, WHITE, right=True),  # today
+                text(F_SMALL, "", 314, y + 13, WHITE, right=True),      # P&L %
+                sep])
+        self.empty = [text(F_MED, "", 160, 80, 0xB8C0C8, center=True),
+                      text(F_SMALL, "", 160, 104, 0x8A9099, center=True)]
+        self.data = None            # [(symbol, qty, avg, ltp, close)] for every holding
+        self.picks = stock_picks()
+        self.shown = []
+        self.page = 0
+        self.last_page = 0.0
+        self.dirty = True
+
+    def update(self, rows):
+        """Every holding from Kite, or None when logged out."""
+        if rows != self.data:
+            self.data = rows
+            self.rebuild()
+
+    def set_picks(self, picks):
+        CFG["STOCK_PICKS"] = ",".join(picks)
+        self.picks = stock_picks()
+        self.rebuild()
+
+    def rebuild(self):
+        by = {}
+        for r in self.data or ():
+            if r[0] not in by:
+                by[r[0]] = r
+        self.shown = [by[s] for s in self.picks if s in by]
+        self.dirty = True
+
+    @property
+    def dwell(self):
+        return max(SCREEN_SECONDS, self.pages() * STOCK_PAGE_SECONDS)
+
+    def pages(self):
+        return max(1, (len(self.shown) + STOCK_ROWS - 1) // STOCK_ROWS)
+
+    def skip(self):
+        return not self.shown
+
+    def enter(self, now):
+        self.page = 0
+        self.last_page = now
+        self.draw()
+
+    def boot(self, now):
+        self.page = (self.page + 1) % self.pages()
+        self.last_page = now
+        self.draw()
+
+    def frame(self, now):
+        if self.dirty:
+            self.draw()
+        if self.pages() > 1 and now - self.last_page > STOCK_PAGE_SECONDS:
+            self.last_page = now
+            self.page = (self.page + 1) % self.pages()
+            self.draw()
+
+    def draw(self):
+        self.dirty = False
+        rows = self.shown
+        pages = self.pages()
+        self.page = min(self.page, pages - 1)
+        chunk = rows[self.page * STOCK_ROWS:(self.page + 1) * STOCK_ROWS]
+        if rows:
+            day = sum((ltp - close) * qty for _, qty, _, ltp, close in rows if close)
+            _set(self.sub, "TODAY " + inr(day, signed=True).replace("₹", ""), GREEN if day >= 0 else RED)
+        else:
+            _set(self.sub, "")
+        _set(self.pg, ("%d/%d" % (self.page + 1, pages)) if pages > 1 else "")
+        for i, (up, dn, flat, sym_l, ltp_l, pnl_l, held_l, chg_l, pct_l, sep) in enumerate(self.rows):
+            if i >= len(chunk):
+                up.hidden = dn.hidden = flat.hidden = sep.hidden = True
+                for lbl in (sym_l, ltp_l, pnl_l, held_l, chg_l, pct_l):
+                    _set(lbl, "")
+                continue
+            sym, qty, avg, ltp, close = chunk[i]
+            chg = ltp - close if close else 0.0
+            pnl = (ltp - avg) * qty
+            c_col = GREEN if chg > 0 else (RED if chg < 0 else 0x8A9099)
+            p_col = GREEN if pnl >= 0 else RED
+            up.hidden = not chg > 0
+            dn.hidden = not chg < 0
+            flat.hidden = chg != 0
+            sep.hidden = False
+            _set(ltp_l, price(ltp))
+            _set(chg_l, "%s %+.2f%%" % (price(chg, True), chg / close * 100 if close else 0.0), c_col)
+            _set(pnl_l, inr(pnl, signed=True), p_col)
+            _set(pct_l, "%+.1f%%" % ((ltp - avg) / avg * 100 if avg else 0.0), p_col)
+            _set(sym_l, _fit(F_MED, _screen_text(sym), self.MID - px_width(F_MED, ltp_l.text) - 26))
+            _set(held_l, _fit(F_SMALL, "%d @ %s" % (qty, price(avg)),
+                              self.MID - px_width(F_SMALL, chg_l.text) - 24))
+        if rows:
+            a = b = ""
+        elif not self.picks:
+            a, b = "No stocks picked yet", "Pick them at http://%s:%d/stocks" % (MY_IP, LOGIN_PORT)
+        elif self.data is None:
+            a, b = "Log in to Kite to see your stocks", "http://%s:%d" % (MY_IP, LOGIN_PORT)
+        else:
+            a, b = "Your picks aren't in your holdings", "Change them at http://%s:%d/stocks" % (MY_IP, LOGIN_PORT)
+        _set(self.empty[0], a)
+        _set(self.empty[1], b)
+
+
+stocks_screen = StocksScreen()
+EXTRA["stocks"] = stocks_screen
+
+
 # ------------------------------------------------------------- night screensavers
 # NIGHT_SCREEN = "clock" (default), "matrix", "fire", "stars" or "cycle" (changes every hour).
 # They can also go in SCREEN_ORDER for the daytime rotation.
@@ -2881,7 +3083,7 @@ for _n, _s in EXTRA.items():
     ALL_SCREENS[_n] = _s.grp
 TICKERS = {"weather": weather_ticker, "portfolio": port_ticker, "markets": mkt_ticker,
            "cricket": cric_ticker}
-DEFAULT_ORDER = "weather,todo,portfolio,heatmap,markets,cricket,stat,news,trivia,net,pet"
+DEFAULT_ORDER = "weather,todo,portfolio,stocks,heatmap,markets,cricket,stat,news,trivia,net,pet"
 
 
 def parse_order(text_):
@@ -3150,6 +3352,7 @@ def show_login_needed(reason):
     kite_forget()
     port_day_pct = None
     heat_screen.update(None)
+    stocks_screen.update(None)
     kite_status = reason
     lbl_day.text = "--"
     lbl_tot.text = "--"
@@ -3178,6 +3381,7 @@ def get_portfolio():
     invested = current = day = 0.0
     movers = []
     heat_rows = []
+    stock_rows = []
     for h in d["data"]:
         qty = (h.get("quantity") or 0) + (h.get("t1_quantity") or 0)
         if qty <= 0:
@@ -3191,6 +3395,7 @@ def get_portfolio():
             movers.append(((last - close) / close * 100, h.get("tradingsymbol", "?")))
         heat_rows.append((h.get("tradingsymbol", "?"), last * qty,
                           (last - close) / close * 100 if close else 0.0))
+        stock_rows.append((h.get("tradingsymbol", "?"), qty, h.get("average_price") or 0, last, close))
     total = current - invested
 
     lbl_day.text = inr(day, signed=True)
@@ -3199,6 +3404,7 @@ def get_portfolio():
     day_pct = day / base * 100 if base else 0
     port_day_pct = day_pct
     heat_screen.update(heat_rows)
+    stocks_screen.update(stock_rows)
     lbl_day_pct.text = "%+.2f%%" % day_pct
     lbl_day_pct.color = lbl_day.color
     lbl_tot.text = inr(total, signed=True)
@@ -4084,7 +4290,7 @@ def home(request: Request):
                 '<p><button style="padding:10px 18px">Send to board</button></p></form>')
         body = PAGE % ("Status: " + kite_status, link + form)
     body = body.replace("</body>", '<p style="margin-top:32px"><a href="/todo">To-do list</a> '
-                        '<a href="/settings">Settings</a></p>'
+                        '<a href="/stocks">My stocks</a> <a href="/settings">Settings</a></p>'
                         '<p style="margin-top:16px"><a href="/cricket" '
                         'style="background:#444">Pick cricket match</a></p>'
                         '<p style="margin-top:16px"><a href="/rotate?on=%d" style="background:#444">'
@@ -4195,7 +4401,7 @@ def stat_debug(request: Request):
 # ------------------------------------------------------------- settings page
 SCREEN_LABELS = {"weather": "Weather", "portfolio": "Portfolio", "heatmap": "Holdings heatmap",
                  "markets": "Markets", "cricket": "Cricket", "stat": "Stat of the day",
-                 "news": "News", "trivia": "Trivia", "net": "Internet", "pet": "Pet", "todo": "To-do",
+                 "news": "News", "trivia": "Trivia", "net": "Internet", "pet": "Pet", "todo": "To-do", "stocks": "My stocks",
                  "clock": "Big clock", "matrix": "Matrix rain", "fire": "Fire", "stars": "Starfield"}
 RESTART_KEYS = ("WEATHER_TOWN", "WEATHER_LAT", "WEATHER_LON", "TRIVIA_SOURCE", "PET_NAME", "NEWS_COUNT")
 force_show = None            # the loop switches to this screen on its next pass
@@ -4268,7 +4474,8 @@ def _opt(options, cur):
 
 def settings_html(msg=""):
     out = ['<div class=note>%s</div>' % msg] if msg else []
-    out.append('<p><a href="/">&larr; Back</a></p><h3>Screens</h3>'
+    out.append('<p><a href="/">&larr; Back</a> &nbsp; <a href="/stocks">Pick My stocks</a> &nbsp; '
+               '<a href="/todo">To-do list</a></p><h3>Screens</h3>'
                '<small>Tap ON/OFF to include a screen, arrows to reorder, "show" to jump to it.</small>')
     for i, n in enumerate(ORDER):
         out.append('<div class=row><a class="pill on" href="/settings/screen?n=%s&op=off">ON</a>'
@@ -4472,7 +4679,7 @@ def settings_reset(request: Request):
                                           'choice) and goes back to settings.toml. The board restarts.</p>'
                                           '<p><a href="/settings/reset?sure=1">Yes, reset</a> &nbsp; '
                                           '<a href="/settings">Cancel</a></p>'))
-    CFG = {}
+    CFG = {k: v for k, v in CFG.items() if k == "STOCK_PICKS"}     # picks live on /stocks
     try:
         save_cfg()
         microcontroller.nvm[0] = 0
@@ -4625,6 +4832,169 @@ def todo_do(request: Request):
     except Exception as e:  # noqa: BLE001
         return _page(request, todo_html("Couldn't save: %s" % esc(str(e))))
     return _page(request, '<!doctype html><meta http-equiv="refresh" content="0;url=/todo">')
+
+
+# ------------------------------------------------------------- My stocks page
+def urlq(s):
+    """Percent-encode a link value (M&M -> M%26M)."""
+    out = []
+    for c in s:
+        if "A" <= c <= "Z" or "a" <= c <= "z" or "0" <= c <= "9" or c in "-_.":
+            out.append(c)
+        else:
+            out.append("".join("%%%02X" % b for b in c.encode()))
+    return "".join(out)
+
+
+def _stock_line(r):
+    """'LTP 2,912.40 · ▲ +1.12% today · P&L +₹9,248 (+18.9%)' for the web page."""
+    sym, qty, avg, ltp, close = r
+    chg = ltp - close if close else 0.0
+    pct = chg / close * 100 if close else 0.0
+    pnl = (ltp - avg) * qty
+    cls = "up" if chg > 0 else ("dn" if chg < 0 else "")
+    arrow = "&#9650;" if chg > 0 else ("&#9660;" if chg < 0 else "&ndash;")
+    return ('%d @ %s &middot; LTP <b>%s</b> &middot; <span class=%s>%s %s (%+.2f%%) today</span> '
+            '&middot; P&amp;L <span class=%s>%s (%+.1f%%)</span>'
+            % (qty, price(avg), price(ltp), cls or "flat", arrow, price(chg, True), pct,
+               "up" if pnl >= 0 else "dn", inr(pnl, signed=True), (ltp - avg) / avg * 100 if avg else 0.0))
+
+
+STOCK_MSGS = {"on": "Turned on the My stocks screen (after Portfolio) - move it in Settings.",
+              "full": "The board keeps up to %d stocks." % STOCK_MAX,
+              "none": "Pick a stock first - the screen only shows stocks you picked.",
+              "err": "Couldn't save - try again."}
+
+STOCK_CSS = (".up{color:#4cd964}.dn{color:#ff5a5a}.flat{color:#999}.del{color:#e57373}"
+             ".name small{display:block;margin-top:3px;line-height:1.5}"
+             ".pg{color:#8ab4f8;font-size:12px;margin:14px 0 0;text-transform:uppercase}"
+             ".tools a{font-size:14px}.add{min-width:56px;text-align:center}")
+
+
+def stocks_html(msg=""):
+    scr = stocks_screen
+    picks = scr.picks
+    by = {}
+    for r in scr.data or ():
+        if r[0] not in by:
+            by[r[0]] = r
+    out = ['<div class=note>%s</div>' % msg] if msg else []
+    out.append('<p><a href="/">&larr; Back</a> &nbsp; <a href="/stocks/do?op=show">Show on the board</a>'
+               ' &nbsp; <a href="/settings">Settings</a></p>')
+    if scr.data is None:
+        out.append('<div class=note>Log in to Kite on the <a href="/">home page</a> to see your '
+                   'holdings. The stocks you already picked are kept.</div>')
+    out.append('<h3>On the board (%d)</h3><small>%d per page; the board flips pages every %d s '
+               '(BOOT button: next page).</small>' % (len(picks), STOCK_ROWS, STOCK_PAGE_SECONDS))
+    for k, s in enumerate(picks):
+        if len(picks) > STOCK_ROWS and k % STOCK_ROWS == 0:
+            out.append('<div class=pg>Page %d</div>' % (k // STOCK_ROWS + 1))
+        r = by.get(s)
+        info = _stock_line(r) if r else ("" if scr.data is None else "not in your holdings any more")
+        q = urlq(s)
+        out.append('<div class=row><span class=name><b>%s</b><small>%s</small></span>'
+                   '<a class=arr href="/stocks/do?op=up&s=%s">&#9650;</a>'
+                   '<a class=arr href="/stocks/do?op=down&s=%s">&#9660;</a>'
+                   '<a class="arr del" href="/stocks/do?op=del&s=%s">&#10005;</a></div>'
+                   % (esc(s), info, q, q, q))
+    if not picks:
+        out.append('<p><small>Nothing picked yet - add stocks from your holdings below.</small></p>')
+    rest = sorted(s for s in by if s not in picks)
+    if scr.data is not None:
+        out.append('<h3>Your holdings (%d more)</h3>' % len(rest))
+        full = len(picks) >= STOCK_MAX
+        for s in rest:
+            add = ('<a class="pill on add" href="/stocks/do?op=add&s=%s">+ Add</a>' % urlq(s)) if not full else ""
+            out.append('<div class=row>%s<span class=name><b>%s</b><small>%s</small></span></div>'
+                       % (add, esc(s), _stock_line(by[s])))
+        if not rest and by:
+            out.append('<p><small>All your holdings are on the board.</small></p>')
+    tools = []
+    if rest and len(picks) < STOCK_MAX:
+        tools.append('<a href="/stocks/do?op=all">Add all</a>')
+    if len(picks) > 1:
+        tools.append('<a href="/stocks/do?op=sort">Sort A-Z</a>')
+    if picks:
+        tools.append('<a href="/stocks/do?op=clear">Remove all</a>')
+    if tools:
+        out.append('<p class=tools>%s</p>' % " &nbsp; ".join(tools))
+    page = SET_PAGE.replace("Dashboard settings</title>", "My stocks</title>").replace(
+        "<h2>Dashboard settings</h2>", "<h2>My stocks</h2>").replace("</style>", STOCK_CSS + "</style>")
+    return page % "".join(out)
+
+
+@server.route("/stocks")
+def stocks_page(request: Request):
+    m = request.query_params.get("m", safe=False)
+    return _page(request, stocks_html(STOCK_MSGS.get(m, "")))
+
+
+def _stocks_on():
+    """Put My stocks in the rotation (after Portfolio) if it isn't there yet."""
+    if "stocks" in ORDER:
+        return False
+    order = list(ORDER)
+    order.insert(order.index("portfolio") + 1 if "portfolio" in order else len(order), "stocks")
+    CFG["SCREEN_ORDER"] = ",".join(order)
+    set_order(order)
+    return True
+
+
+@server.route("/stocks/do")
+def stocks_do(request: Request):
+    global force_show
+    q = request.query_params
+    op = q.get("op", safe=False)
+    s = q.get("s", safe=False)
+    s = unquote(s).strip().upper() if s else ""
+    picks = list(stocks_screen.picks)
+    held = sorted(set(r[0] for r in stocks_screen.data or ()))
+    m = ""
+    if op == "show":
+        if not picks:
+            m = "none"
+        else:
+            if _stocks_on():
+                m = "on"
+                try:
+                    save_cfg()
+                except Exception:  # noqa: BLE001
+                    m = "err"
+            force_show = "stocks"
+        return _page(request, '<!doctype html><meta http-equiv="refresh" content="0;url=/stocks%s">'
+                     % ("?m=" + m if m else ""))
+    if op == "add" and s in held and s not in picks:
+        if len(picks) >= STOCK_MAX:
+            m = "full"
+        else:
+            picks.append(s)
+    elif op == "all":
+        picks += [h for h in held if h not in picks]
+        if len(picks) > STOCK_MAX:
+            picks, m = picks[:STOCK_MAX], "full"
+    elif op == "del" and s in picks:
+        picks.remove(s)
+    elif op in ("up", "down") and s in picks:
+        i = picks.index(s)
+        j = i - 1 if op == "up" else i + 1
+        if 0 <= j < len(picks):
+            picks[i], picks[j] = picks[j], picks[i]
+    elif op == "sort":
+        picks.sort()
+    elif op == "clear":
+        picks = []
+    if picks != stocks_screen.picks:
+        old = stocks_screen.picks
+        stocks_screen.set_picks(picks)
+        if picks and not old and _stocks_on():
+            m = m or "on"
+        try:
+            save_cfg()
+        except Exception:  # noqa: BLE001
+            stocks_screen.set_picks(old)
+            m = "err"
+    return _page(request, '<!doctype html><meta http-equiv="refresh" content="0;url=/stocks%s">'
+                 % ("?m=" + m if m else ""))
 
 
 @server.route("/kite")
@@ -4828,7 +5198,7 @@ while True:
                                else "#Update failed - will retry  " + weather_msg)
 
         if market_open():
-            every = KITE_EVERY_FAST if ORDER[screen] == "portfolio" else KITE_EVERY_OPEN
+            every = KITE_EVERY_FAST if ORDER[screen] in ("portfolio", "stocks") else KITE_EVERY_OPEN
         else:
             every = KITE_EVERY_CLOSED
         if kite_token and now_m - last_kite > every:

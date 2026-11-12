@@ -74,6 +74,10 @@ HOLD = [
  {"tradingsymbol":"HDFCBANK","quantity":40,"t1_quantity":5,"average_price":1580.0,"last_price":1742.5,"close_price":1731.0},
  {"tradingsymbol":"TATAMOTORS","quantity":60,"t1_quantity":0,"average_price":690.0,"last_price":712.3,"close_price":728.9},
  {"tradingsymbol":"NIFTYBEES","quantity":300,"t1_quantity":0,"average_price":238.0,"last_price":271.6,"close_price":270.2},
+ {"tradingsymbol":"M&M","quantity":15,"t1_quantity":0,"average_price":2650.0,"last_price":3120.5,"close_price":3098.0},
+ {"tradingsymbol":"MRF","quantity":1,"t1_quantity":0,"average_price":118500.0,"last_price":131250.0,"close_price":132480.0},
+ {"tradingsymbol":"BAJAJ-AUTO","quantity":4,"t1_quantity":0,"average_price":9100.0,"last_price":8875.0,"close_price":8875.0},
+ {"tradingsymbol":"ICICIPRULI","quantity":120,"t1_quantity":0,"average_price":560.0,"last_price":612.35,"close_price":604.1},
 ]
 KITE_EXPIRED = os.environ.get("KITE_EXPIRED") == "1"
 class Session:
