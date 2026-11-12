@@ -42,6 +42,7 @@ Preview screens and test the code without the board:
 pip install adafruit-blinka-displayio blinka-displayio-pygamedisplay pygame
 SHOW=news OUT=news.png python tools/simulator/harness.py      # render one screen to a PNG
 python tools/simulator/dryrun.py                              # real web server on 127.0.0.1:8080
+SHOW=pet python tools/simulator/strict.py                      # like harness.py, but drawing outside a bitmap fails as on the board
 ```
 
 Useful variables for `harness.py`: `SHOW` (weather, port, markets, cric, news, clock), `THEME` (aura, classic), `FAKE_HOUR` (e.g. 23 for night mode), `WCODE` and `ISDAY` (Open-Meteo weather code and day/night, to preview skies), `LOGIN=1` (fake Kite login with holdings and positions; `POS_FAIL=1` makes the positions call fail, `NO_POS=1` returns none), `STEPS`, `OUT`.

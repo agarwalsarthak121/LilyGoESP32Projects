@@ -336,8 +336,13 @@ import math
 
 def _circle(bmp, cx, cy, r, v):
     for yy in range(-r, r + 1):
+        y = cy + yy
+        if not 0 <= y < bmp.height:              # clipped, as in _ellipse
+            continue
         half = int((r * r - yy * yy) ** 0.5 + 0.5)
-        bitmaptools.fill_region(bmp, cx - half, cy + yy, cx + half + 1, cy + yy + 1, v)
+        x1, x2 = max(0, cx - half), min(bmp.width, cx + half + 1)
+        if x1 < x2:
+            bitmaptools.fill_region(bmp, x1, y, x2, y + 1, v)
 
 
 class AnalogClock:
@@ -2181,10 +2186,15 @@ def _rope(bmp, pts, r, v):
 
 
 def _ellipse(bmp, cx, cy, rx, ry, v):
+    # clipped to the bitmap: CircuitPython raises on a fill outside it (the desktop simulator doesn't)
     for dy in range(-ry, ry + 1):
+        y = cy + dy
+        if not 0 <= y < bmp.height:
+            continue
         half = int(rx * (1 - (dy / ry) ** 2) ** 0.5 + 0.5) if ry else rx
-        bitmaptools.fill_region(bmp, max(0, cx - half), cy + dy, min(bmp.width, cx + half + 1),
-                                cy + dy + 1, v)
+        x1, x2 = max(0, cx - half), min(bmp.width, cx + half + 1)
+        if x1 < x2:
+            bitmaptools.fill_region(bmp, x1, y, x2, y + 1, v)
 
 
 class PetScreen(Screen):
@@ -2345,8 +2355,8 @@ class PetScreen(Screen):
             _ellipse(b, cx, cy, rx, ry, v)
 
         if mood == "sleep":
-            _rope(b, [(12, 40), (8, 44), (12, 47), (20, 47)], 3, D_LINE)
-            _rope(b, [(12, 40), (8, 44), (12, 47), (20, 47)], 2, D_FUR)
+            _rope(b, [(12, 39), (8, 43), (12, 46), (20, 46)], 3, D_LINE)
+            _rope(b, [(12, 39), (8, 43), (12, 46), (20, 46)], 2, D_FUR)
             blob(28, 40, 19, 7, D_FUR)
             _ellipse(b, 28, 43, 15, 3, D_SHADE)
             blob(46, 38, 9, 7, D_FUR)
@@ -2360,7 +2370,7 @@ class PetScreen(Screen):
         down = mood in ("sad", "worried")
         # tail: curled over the back and wagging, or tucked low when sad
         if down:
-            tail = [(16, 38), (11, 42), (9, 46), (13, 48), (18, 48)]
+            tail = [(16, 37), (11, 41), (9, 44), (13, 46), (18, 46)]
         elif wag:
             tail = [(16, 31), (11, 28), (8, 23), (9, 18), (13, 15), (16, 17)]
         else:
@@ -2461,7 +2471,10 @@ class PetScreen(Screen):
         face = (mood, blink, mouth, wag)
         if face != self.face:
             self.face = face
-            bitmaptools.blit(self.bmp, self.pose(face), 0, 0)     # one quick copy, no half-drawn frames
+            try:
+                bitmaptools.blit(self.bmp, self.pose(face), 0, 0)     # one quick copy, no half-drawn frames
+            except Exception as e:  # noqa: BLE001 - keep the last good picture, say why on /debug
+                log_err("pet %s pose failed: %r" % (mood, e))
         # body language
         phase = now % 3.0
         y = 36
