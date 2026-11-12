@@ -101,7 +101,7 @@ def client():
             urllib.request.urlopen("http://127.0.0.1:8080" + href, timeout=8).read()
     print("following:", NS["cric_ids"], "| board shows:", NS["cric_id"], NS["lbl_cpage"].text)
     urllib.request.urlopen("http://127.0.0.1:8080/cricket?del=" + NS["cric_ids"][0], timeout=8).read()
-    print("after stop:", NS["cric_ids"], "| saved:", NS["CFG"].get("CRICKET_MATCHES"))
+    print("after stop:", NS["cric_ids"], "| saved:", NS["CFG"].get(NS["CRIC_CFG"]))
     # THEME TEST: choosing a look saves it to NVM and asks for a restart
     r = urllib.request.urlopen("http://127.0.0.1:8080/theme?name=classic", timeout=4).read().decode()
     print("theme page:", r.split("<p>")[1][:60] if "<p>" in r else r[:80], "| nvm[0] =", NS["microcontroller"].nvm[0] if "microcontroller" in NS else "?")

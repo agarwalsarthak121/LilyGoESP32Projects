@@ -200,6 +200,52 @@ class Session:
             data = {"^BSESN": (76957.27, -307.23, -0.40), "^NSEI": (24080.40, -95.25, -0.39),
                     "^IXIC": (19871.42, 182.35, 0.93), "^GSPC": (6012.18, 21.07, 0.35)}[sym]
             return Resp([{"symbol": sym, "price": data[0], "change": data[1], "changePercentage": data[2]}])
+        if "cricbuzz.com" in url:
+            import json as _j
+            print("CB GET", url.split("cricbuzz.com")[1][:60])
+            if os.environ.get("CB_FAIL"):
+                r = Resp(None, b""); r.status_code = 403; return r
+            if "live-scores" in url:
+                pad = "<div class='x'>" + "filler " * 3000 + "</div>"
+                html = ("<html><head><title>Live Cricket Scores</title></head><body>" + pad +
+                        '<a href="/live-cricket-scores/171301/ind-vs-sa-2nd-test-south-africa-tour-of-india-2026" '
+                        'title="India vs South Africa, 2nd Test - Live Cricket Score, Commentary" class="cb-lv-scrs-well">IND 312/5</a>' + pad +
+                        '<a class="text-hvr-underline" title="Mumbai vs Delhi, Elite Group A" href="/live-cricket-scores/171450/mum-vs-del-elite-group-a-ranji-trophy-2026-27">MUM vs DEL</a>' + pad +
+                        '<a href="/live-cricket-scores/171520/aus-vs-eng-1st-odi-england-tour-of-australia-2026">AUS vs ENG</a>' +
+                        '<a href="/live-cricket-scores/171301/ind-vs-sa-2nd-test">again</a></body></html>')
+                return Resp(None, html.encode())
+            mid = url.rstrip("/").split("/")[-1]
+            def team(i, n, s): return {"id": i, "name": n, "shortName": s}
+            if mid == "171301":
+                head = {"matchId": 171301, "matchDescription": "2nd Test", "matchFormat": "TEST", "state": "In Progress",
+                        "status": "India lead by 27 runs", "team1": team(2, "India", "IND"), "team2": team(11, "South Africa", "SA"),
+                        "seriesName": "South Africa tour of India, 2026"}
+                mini = {"inningsId": 2, "overs": 88.3, "currentRunRate": 3.53, "requiredRunRate": 0, "status": "",
+                        "batTeam": {"teamId": 2, "teamScore": 312, "teamWkts": 5},
+                        "batsmanStriker": {"batName": "Shubman Gill", "batRuns": 112, "batBalls": 198},
+                        "batsmanNonStriker": {"batName": "Rishabh Pant", "batRuns": 44, "batBalls": 61},
+                        "bowlerStriker": {"bowlName": "Kagiso Rabada", "bowlOvs": 21.3, "bowlMaidens": 4, "bowlRuns": 71, "bowlWkts": 2},
+                        "recentOvsStats": "... 0 1 4 0 0 1 | 0 0 1 4 ", "lastWicket": "KL Rahul c Verreynne b Rabada 38(77) - 214/4 in 61.2 ov.",
+                        "matchScoreDetails": {"state": "In Progress", "inningsScoreList": [
+                            {"inningsId": 2, "batTeamId": 2, "batTeamName": "IND", "score": 312, "wickets": 5, "overs": 88.3, "isDeclared": False},
+                            {"inningsId": 1, "batTeamId": 11, "batTeamName": "SA", "score": 285, "wickets": 10, "overs": 92.6, "isDeclared": False}]}}
+            elif mid == "171450":
+                head = {"matchId": 171450, "matchDescription": "Elite Group A", "matchFormat": "TEST", "state": "Stumps",
+                        "status": "Day 1: Stumps - Mumbai 248/4", "team1": team(54, "Mumbai", "MUM"), "team2": team(57, "Delhi", "DEL")}
+                mini = {"batTeam": {"teamId": 54}, "batsmanStriker": {"batName": "Sarfaraz Khan", "batRuns": 87, "batBalls": 140},
+                        "batsmanNonStriker": {"batName": "Shardul Thakur", "batRuns": 12, "batBalls": 30},
+                        "matchScoreDetails": {"inningsScoreList": [{"inningsId": 1, "batTeamId": 54, "score": 248, "wickets": 4, "overs": 90.0}]}}
+            elif mid == "171520":
+                head = {"matchId": 171520, "matchDescription": "1st ODI", "matchFormat": "ODI", "state": "Preview",
+                        "status": "Match starts at Nov 13, 03:30 GMT", "team1": team(4, "Australia", "AUS"), "team2": team(9, "England", "ENG")}
+                mini = None
+            else:
+                r = Resp(None, b""); r.status_code = 204; return r
+            body = {"commentaryList": [{"commText": "filler ball %d " % k + "x" * 300, "ballNbr": k} for k in range(150)],
+                    "matchHeader": head, "page": "commentary"}
+            if mini is not None:
+                body["miniscore"] = mini
+            return Resp(None, _j.dumps(body).encode())
         if "cricinfo" in url:
             print("RSS GET", headers.get("User-Agent","")[:20] if headers else None)
             xml = """<?xml version="1.0"?><rss version="2.0"><channel><title>Cricinfo Live Scores</title>

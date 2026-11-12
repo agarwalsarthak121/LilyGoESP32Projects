@@ -26,7 +26,8 @@ KITE_API_SECRET = ""
 FMP_API_KEY = ""
 
 # --- Cricket ---
-# CRICKET_SOURCE = "rss"      # "rss" = ESPNcricinfo feed (default, no key) or "cricapi"
+# CRICKET_SOURCE = "cricbuzz" # "cricbuzz" (default, no key: score, overs, batters, bowler),
+#                             # "rss" (ESPNcricinfo feed: mostly scores only) or "cricapi"
 # CRICKET_API_KEY = ""        # only for CRICKET_SOURCE = "cricapi" (cricketdata.org)
 # CRICKET_TEAM = "India"      # follow this team's live matches (several: "India, Mumbai Indians")
 # CRICKET_MATCH_SECONDS = "8" # seconds per match when following several (pick them at /cricket)

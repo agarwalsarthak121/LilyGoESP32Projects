@@ -110,11 +110,15 @@ auto_rotate = (cfg("AUTO_ROTATE") or "on").strip().lower() not in ("off", "0", "
     and SCREEN_SECONDS > 0
 CRIC_KEY = os.getenv("CRICKET_API_KEY") or ""
 CRIC_TEAM = (cfg("CRICKET_TEAM") or "").lower()
-# cricket source: "rss" = ESPNcricinfo live-scores feed (free, no key, ~30 s refresh)
+# cricket source: "cricbuzz" = Cricbuzz's match data (default; free, no key: score, overs,
+#                              batters, bowler, run rates)
+#                 "rss" = ESPNcricinfo live-scores feed (free, no key; scores, details when Cricinfo allows)
 #                 "cricapi" = CricketData.org (needs key, 100 hits/day)
-CRIC_SOURCE = (os.getenv("CRICKET_SOURCE") or "rss").lower()
+CRIC_SOURCE = (os.getenv("CRICKET_SOURCE") or "cricbuzz").lower()
 CRIC_RSS = CRIC_SOURCE == "rss"
-CRIC_EVERY = int(os.getenv("CRICKET_EVERY") or ("30" if CRIC_RSS else "300"))
+CRIC_CB = CRIC_SOURCE == "cricbuzz"
+CRIC_ON = CRIC_RSS or CRIC_CB or bool(CRIC_KEY)
+CRIC_EVERY = int(os.getenv("CRICKET_EVERY") or ("30" if (CRIC_RSS or CRIC_CB) else "300"))
 CRIC_API = "https://api.cricapi.com/v1/"
 RSS_URL = "https://static.cricinfo.com/rss/livescores.xml"
 LOGIN_PORT = 8080
@@ -3651,9 +3655,10 @@ def us_market_open():
 CRIC_MAX = 6
 CRIC_MATCH_SECONDS = max(3, int(os.getenv("CRICKET_MATCH_SECONDS") or "8"))
 CRIC_GONE_SECS = 30 * 60    # a followed match out of the feed this long has finished: forget it
-cric_ids = [i.strip() for i in (cfg("CRICKET_MATCHES") or "").split(",") if i.strip()][:CRIC_MAX]
+CRIC_CFG = "CRICKET_MATCHES" if CRIC_RSS else "CRICKET_MATCHES_" + CRIC_SOURCE.upper()   # ids differ per source
+cric_ids = [i.strip() for i in (cfg(CRIC_CFG) or "").split(",") if i.strip()][:CRIC_MAX]
 cric_id = cric_ids[0] if cric_ids else None     # the one on screen now
-cric_items = {}         # id -> latest feed item (RSS) or match (cricapi), for every match in the feed
+cric_items = {}         # id -> latest feed item (RSS), match (cricapi) or followed match read (Cricbuzz)
 cric_details = {}       # id -> overs/batters from Cricinfo (RSS source)
 cric_detail_at = {}     # id -> when those were fetched
 cric_gone = {}          # id -> when a followed match was first missing from the feed
@@ -3723,17 +3728,30 @@ def show_match(m):
         m.get("status") or "", m.get("venue") or "", cric_hits) + stamp())
 
 
+cb_list_cache = [0.0, None]     # (when, matches): Cricbuzz's list page is big, keep it a while
+
+
 def cric_feed():
-    """Every current match: the Cricinfo live feed, or one cricapi call."""
+    """Every current match: the Cricinfo live feed, Cricbuzz's live-scores page or one cricapi call."""
+    if CRIC_CB:
+        now = time.monotonic()
+        if cb_list_cache[1] is None or now - cb_list_cache[0] > 120:
+            cb_list_cache[:] = [now, cb_list()]
+        return cb_list_cache[1]
     return rss_items() if CRIC_RSS else cric_get("currentMatches?offset=0")
 
 
 def get_cricket():
-    cric_update(cric_feed())
+    if CRIC_CB:                 # Cricbuzz: one followed match at a time
+        mid = cb_due(time.monotonic(), True) or cric_id
+        if mid:
+            cb_fetch(mid)
+    else:
+        cric_update(cric_feed())
 
 
 def cric_save():
-    CFG["CRICKET_MATCHES"] = ",".join(cric_ids)
+    CFG[CRIC_CFG] = ",".join(cric_ids)
     try:
         save_cfg()
     except Exception as e:  # noqa: BLE001
@@ -3787,6 +3805,9 @@ def cric_update(items):
     """A fresh feed: keep it, forget followed matches that left it long ago, redraw."""
     global cric_others
     now = time.monotonic()
+    if CRIC_CB:                 # the list is only for picking; scores come from cb_fetch()
+        cric_render()
+        return
     cric_items.clear()
     for it in items:
         if it.get("id"):
@@ -3812,9 +3833,10 @@ def cric_render():
     """Draw the followed match that's on screen (or the first one still in the feed)."""
     global cric_id, cric_item, cric_detail, cric_ended
     ids = cric_shown_ids()
-    if cric_id not in ids:
+    waiting = CRIC_CB and cric_id in cric_ids and cric_id not in cric_items and cric_id not in cric_gone
+    if cric_id not in ids and not waiting:
         cric_id = ids[0] if ids else (cric_ids[0] if cric_ids else None)
-    lbl_cpage.text = ("%d/%d" % (ids.index(cric_id) + 1, len(ids))) if len(ids) > 1 else ""
+    lbl_cpage.text = ("%d/%d" % (ids.index(cric_id) + 1, len(ids))) if len(ids) > 1 and cric_id in ids else ""
     if not cric_id:
         cric_item, cric_detail = None, {}
         lbl_cname.text = "No match selected"
@@ -3822,13 +3844,22 @@ def cric_render():
         cric_ticker.set("#Pick matches at http://%s:%d/cricket" % (MY_IP, LOGIN_PORT))
         return
     m = cric_items.get(cric_id)
+    if m is None and CRIC_CB and cric_id not in cric_gone:
+        err = cb_err.get(cric_id)
+        lbl_cname.text = ("Cricbuzz said %s - retrying" % err) if err else "Loading the score from Cricbuzz..."
+        if err:
+            cric_ticker.set("#Couldn't read the score from Cricbuzz (%s) - retrying  #Details: http://%s:%d/cricket/debug"
+                            % (err, MY_IP, LOGIN_PORT))
+        return
     if m is None:                       # every followed match has left the feed
         cric_item, cric_ended = None, True
         lbl_clive.text, lbl_clive.color = "FINISHED", GREYS[5]
         cric_ticker.set("#%s left the live feed (finished?)  %s" % (
             "Your matches have" if len(cric_ids) > 1 else "This match has", cric_others))
         return
-    if CRIC_RSS:
+    if CRIC_CB:
+        show_cb(m)
+    elif CRIC_RSS:
         cric_item = m
         cric_detail = cric_details.get(cric_id) or {}
         show_rss(m)
@@ -3853,7 +3884,7 @@ def auto_pick():
     items = cric_feed()
     added = False
     for m in items:
-        names = (m.get("title") or " ".join(m.get("teams") or [])).lower()
+        names = (m.get("title") or " ".join(m.get("teams") or [])).lower() + " " + m.get("link", "")
         mid = m.get("id")
         if (mid and mid not in cric_ids and mid not in cric_dropped and not m.get("matchEnded")
                 and any(t in names for t in teams) and len(cric_ids) < CRIC_MAX):
@@ -4115,6 +4146,259 @@ def get_cricket_detail(item):
         cric_detail = cric_details[item["id"]]
         show_rss(item)                 # redraw now with overs + batters
         cric_tick()
+
+
+# ---- Cricbuzz source (CRICKET_SOURCE = "cricbuzz", the default)
+# Each followed match is read from the JSON behind Cricbuzz's own match page:
+# score, overs, both batters, the bowler, run rates, recent balls, status.
+# The list of matches to pick from comes from the links on its live-scores page.
+CB_MATCH_URL = "https://www.cricbuzz.com/api/cricket-match/commentary/%s"
+CB_LIST_URL = "https://www.cricbuzz.com/cricket-match/live-scores"
+CB_HDR = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                        "(KHTML, like Gecko) Chrome/130.0 Safari/537.36",
+          "Accept": "application/json, text/html;q=0.9, */*;q=0.8",
+          "Referer": "https://www.cricbuzz.com/"}
+
+
+def _cb_get(url, cap):
+    """Body of a Cricbuzz page as text (at most `cap` bytes), and the HTTP status."""
+    parts, size = [], 0
+    with requests.get(url, headers=CB_HDR, timeout=NET_TIMEOUT) as r:
+        status = r.status_code
+        if status == 200:
+            for chunk in r.iter_content(chunk_size=4096):
+                parts.append(chunk)
+                size += len(chunk)
+                if size >= cap:
+                    break
+    body = _text(b"".join(parts))
+    del parts
+    return status, body
+
+
+def _cb_slug_title(slug):
+    """'ind-vs-aus-3rd-t20i-australia-tour-of-india-2026' -> 'IND vs AUS 3rd T20I Australia tour of India 2026'."""
+    words = [w for w in slug.split("-") if w]
+    out = []
+    for n, w in enumerate(words):
+        near_vs = "vs" in words[max(0, n - 1):n + 2] and w != "vs"
+        if w == "vs" or w in ("of", "the", "and", "in"):
+            out.append(w)
+        elif near_vs or w in ("odi", "t20i", "t20", "t10", "wt20i", "wodi"):
+            out.append(w.upper())
+        else:
+            out.append(w[:1].upper() + w[1:])
+    return " ".join(out)[:90]
+
+
+def _cb_links(buf, items, seen):
+    """Pick /live-cricket-scores/<id>/<slug> links out of `buf` into `items`.
+    Returns where to keep reading from (an unfinished link stays for the next chunk)."""
+    key = "/live-cricket-scores/"
+    i, done = 0, 0
+    while len(items) < 40:
+        i = buf.find(key, i)
+        if i < 0:
+            break
+        j = i + len(key)
+        gt = buf.find(">", j)
+        if gt < 0:                       # the tag goes on in the next chunk
+            return max(0, i - 1500)
+        k = j
+        while k < len(buf) and buf[k].isdigit():
+            k += 1
+        mid, slug = buf[j:k], ""
+        if buf[k:k + 1] == "/":
+            e = k + 1
+            while e < gt and buf[e] not in "\"'?#< >\\":
+                e += 1
+            slug = buf[k + 1:e]
+        i, done = gt, gt
+        if not mid or mid in seen:
+            continue
+        seen.add(mid)
+        a = buf.rfind("<a", 0, j)        # the link's title="..." if it has one
+        title = ""
+        if a >= 0 and gt - a < 1500:
+            t = buf.find('title="', a, gt)
+            if t >= 0:
+                title = buf[t + 7:buf.find('"', t + 7, gt)]
+        title = _tagless(title).replace(" - Live Cricket Score, Commentary", "").strip()
+        items.append({"id": mid, "title": title or _cb_slug_title(slug) or ("Match " + mid),
+                      "link": "https://www.cricbuzz.com/live-cricket-scores/%s/%s" % (mid, slug)})
+    return max(done, len(buf) - 1600)
+
+
+def cb_list():
+    """Matches on Cricbuzz's live-scores page (live, recent and coming up):
+    [{"id", "title", "link"}]. The page is read in small pieces, never whole."""
+    items, seen, tail, size = [], set(), "", 0
+    with requests.get(CB_LIST_URL, headers=CB_HDR, timeout=NET_TIMEOUT) as r:
+        status = r.status_code
+        cric_debug["list_status"] = status
+        if status != 200:
+            raise RuntimeError("Cricbuzz list HTTP %d" % status)
+        for chunk in r.iter_content(chunk_size=4096):
+            size += len(chunk)
+            buf = tail + _text(chunk)
+            tail = buf[_cb_links(buf, items, seen):]
+            if size > 1200000 or len(items) >= 40:
+                break
+    cric_debug["list_bytes"] = size
+    cric_debug["list_found"] = len(items)
+    return items
+
+
+def _cb_overs(o):
+    """Cricbuzz overs 18.3 -> '18.3', 19.6 -> '20' (it uses .6 for a finished over)."""
+    try:
+        o = float(o)
+    except (TypeError, ValueError):
+        return ""
+    whole = int(o)
+    balls = int(round((o - whole) * 10))
+    if balls >= 6:
+        whole, balls = whole + 1, 0
+    return ("%d.%d" % (whole, balls)) if balls else ("%d" % whole)
+
+
+def _cb_bat(b):
+    if not b or not b.get("batName"):
+        return ""
+    return "%s %s(%s)" % (b["batName"].split()[-1], b.get("batRuns", 0), b.get("batBalls", 0))
+
+
+def cb_parse(mid, body):
+    """The bits of Cricbuzz's match JSON the screen needs."""
+    import json
+    head = json.loads(_balanced(body, '"matchHeader":') or "{}")
+    mini = json.loads(_balanced(body, '"miniscore":') or "{}")
+    teams = []
+    for k in ("team1", "team2"):
+        t = head.get(k) or {}
+        teams.append((t.get("id"), t.get("name") or "?", (t.get("shortName") or t.get("name") or "?")[:5].upper()))
+    state = head.get("state") or (mini.get("matchScoreDetails") or {}).get("state") or ""
+    inns = []
+    for s in (mini.get("matchScoreDetails") or {}).get("inningsScoreList") or []:
+        w = s.get("wickets", 0) or 0
+        txt = ("%s" % s.get("score", 0)) if w >= 10 else "%s/%s%s" % (s.get("score", 0), w,
+                                                                     "d" if s.get("isDeclared") else "")
+        inns.append((s.get("inningsId", 0), s.get("batTeamId"), txt, _cb_overs(s.get("overs"))))
+    inns.sort(key=lambda x: x[0] or 0)
+    bat = (mini.get("batTeam") or {}).get("teamId")
+    striker = _cb_bat(mini.get("batsmanStriker"))
+    other = _cb_bat(mini.get("batsmanNonStriker"))
+    batters = "   ".join([p for p in (striker.replace("(", "*(", 1) if striker else "", other) if p])
+    b = mini.get("bowlerStriker") or {}
+    bowler = ("%s %s-%s-%s-%s" % (b["bowlName"].split()[-1], _cb_overs(b.get("bowlOvs")), b.get("bowlMaidens", 0),
+                                  b.get("bowlRuns", 0), b.get("bowlWkts", 0))) if b.get("bowlName") else ""
+    rates = []
+    if mini.get("currentRunRate"):
+        rates.append("CRR %.2f" % float(mini["currentRunRate"]))
+    if mini.get("requiredRunRate"):
+        rates.append("RRR %.2f" % float(mini["requiredRunRate"]))
+    st = state.lower()
+    return {"id": mid, "state": state, "matchEnded": st in ("complete", "abandon", "abandoned", "no result"),
+            "started": st not in ("preview", "upcoming", "toss", ""),
+            "title": "%s v %s, %s" % (teams[0][1], teams[1][1], head.get("matchDescription") or ""),
+            "format": (head.get("matchFormat") or "").upper(), "status": head.get("status") or mini.get("status") or "",
+            "teams": teams, "inns": inns, "bat": bat, "batters": batters, "bowler": bowler,
+            "rates": "  ".join(rates), "recent": (mini.get("recentOvsStats") or "").strip(),
+            "last": mini.get("lastWicket") or ""}
+
+
+cb_err = {}             # id -> why the last Cricbuzz read failed
+
+
+def cb_fetch(mid):
+    """Read one followed match from Cricbuzz and redraw."""
+    now = time.monotonic()
+    cric_detail_at[mid] = now                      # tried now, even if it fails
+    url = CB_MATCH_URL % mid
+    status, body = _cb_get(url, 400000)
+    cric_debug.clear()
+    cric_debug.update({"url": url, "status": status, "bytes": len(body)})
+    d = None
+    if status == 200 and body:
+        try:
+            d = cb_parse(mid, body)
+        except Exception as e:  # noqa: BLE001
+            cric_debug["parse_error"] = repr(e)
+    del body
+    cb_err.pop(mid, None)
+    if d:
+        cric_items[mid] = d
+        cric_debug["parsed"] = d
+        if d["matchEnded"]:
+            cric_gone.setdefault(mid, now)
+        else:
+            cric_gone.pop(mid, None)
+    elif status in (200, 204):  # Cricbuzz has nothing for this id: give up after a while
+        cric_gone.setdefault(mid, now)
+    else:                       # blocked or down: keep the match, say why, retry
+        cb_err[mid] = "HTTP %d" % status
+    if now - cric_gone.get(mid, now) > CRIC_GONE_SECS and mid in cric_ids:
+        cric_ids.remove(mid)
+        for dct in (cric_details, cric_detail_at, cric_gone, cric_items):
+            dct.pop(mid, None)
+        cric_save()
+    cric_render()
+    if not d and status != 200:
+        raise RuntimeError("Cricbuzz match %s: HTTP %d" % (mid, status))
+
+
+def cb_due(now, on_screen):
+    """The followed match most in need of a refresh (None if none is due).
+    The one on screen goes first when it has never been read."""
+    if cric_id in cric_ids and cric_id not in cric_detail_at:
+        return cric_id
+    best, best_age = None, 0.0
+    for mid in cric_ids:
+        d = cric_items.get(mid)
+        age = now - cric_detail_at.get(mid, -1e9)
+        if d and d["matchEnded"]:
+            need = 600
+        elif d and not d["started"]:
+            need = 300
+        elif on_screen:
+            need = 20 if mid == cric_id else 30
+        else:
+            need = CRIC_EVERY * 4
+        if age > need and age > best_age:
+            best, best_age = mid, age
+    return best
+
+
+def show_cb(d):
+    """Draw a Cricbuzz match on the cricket screen (both looks)."""
+    global cric_ended
+    cric_ended = d["matchEnded"]
+    st = d["state"].lower()
+    lbl_ctype.text = d["format"] or "CRICBUZZ"
+    if cric_ended:
+        lbl_clive.text, lbl_clive.color = "RESULT", GREYS[5]
+    elif st == "in progress":
+        lbl_clive.text, lbl_clive.color = "LIVE", RED
+    elif d["started"]:
+        lbl_clive.text, lbl_clive.color = d["state"].upper()[:9], GREYS[5]   # STUMPS, TEA, INNINGS...
+    else:
+        lbl_clive.text, lbl_clive.color = "UPCOMING", GREYS[5]
+    for i, (tid, name, short) in enumerate(d["teams"]):
+        mine = [x for x in d["inns"] if x[1] == tid]
+        batting = tid is not None and tid == d["bat"] and not cric_ended and d["started"]
+        cric_team[i].text = short
+        cric_score[i].text = " & ".join(x[2] for x in mine) or "-"
+        cric_overs[i].text = (("%s ov" % mine[-1][3]) if mine and mine[-1][3] else name[:24]) + \
+            ("  BATTING" if batting else "")
+        cric_team[i].color = cric_score[i].color = GREYS[0] if batting else GREYS[3]
+        th_team(i, name, batting)
+    lbl_cname.text = (d["batters"] or d["title"])[:52]
+    parts = [d["status"], d["rates"], ("Bowler " + d["bowler"]) if d["bowler"] else "",
+             ("Recent " + d["recent"]) if d["recent"] else "", ("Last wkt " + d["last"]) if d["last"] else ""]
+    t = time.localtime()
+    cric_ticker.set("#" + "  #".join(p for p in parts if p) +
+                    "  #Updated %02d:%02d:%02d  #Data: Cricbuzz" % (t.tm_hour, t.tm_min, t.tm_sec))
+
 
 
 # ------------------------------------------------------------- news
@@ -5274,7 +5558,7 @@ def cricket_debug(request: Request):
             for k, v in cric_debug.items()]
     rows.append("<p><b>shown</b><br><code>%s</code></p>" % esc(str(cric_detail)))
     return Response(request, PAGE.replace("Zerodha login", "Cricket debug") %
-                    ("What the board got from Cricinfo for the selected match:",
+                    ("What the board last got for the selected match:",
                      "".join(rows) or "Nothing fetched yet - pick a live match first."),
                     content_type="text/html")
 
@@ -5293,6 +5577,8 @@ def _screen_on(name, after):
 def _cric_state(m):
     if CRIC_RSS:
         return "live" if "*" in m.get("title", "") else ""
+    if CRIC_CB:
+        return esc(" - ".join(x for x in (m.get("state"), m.get("status")) if x))
     state = "ended" if m.get("matchEnded") else ("live" if m.get("matchStarted") else "upcoming")
     return "%s - %s" % (state, esc(m.get("status") or ""))
 
@@ -5300,7 +5586,7 @@ def _cric_state(m):
 @server.route("/cricket")
 def cricket_page(request: Request):
     global cric_id, last_cric, last_cdetail, force_show
-    if not CRIC_RSS and not CRIC_KEY:
+    if not CRIC_ON:
         return Response(request, PAGE % ("Add CRICKET_API_KEY to settings.toml first "
                                          "(free key from cricketdata.org).", ""),
                         content_type="text/html")
@@ -5319,9 +5605,16 @@ def cricket_page(request: Request):
     for m in items:
         if m.get("id"):
             feed[m["id"]] = m
-    cric_items.clear()
-    cric_items.update(feed)
-    name = lambda mid: esc(cric_title(feed[mid])) if mid in feed else "that match"  # noqa: E731
+    if not CRIC_CB:             # (Cricbuzz keeps its per-match reads in cric_items)
+        cric_items.clear()
+        cric_items.update(feed)
+
+    def info(mid):              # what we know about a match: its latest read, else its list entry
+        return cric_items.get(mid) or feed.get(mid)
+
+    def name(mid):
+        m = info(mid)
+        return esc(cric_title(m)) if m else "that match"
     msg = ""
     if add == "off":
         for mid in list(cric_ids):
@@ -5346,8 +5639,10 @@ def cricket_page(request: Request):
         msg = "Showing " + name(show)
     if add or rem or show:
         cric_save()
-        last_cric = time.monotonic()
+        last_cric = 0.0 if CRIC_CB else time.monotonic()    # Cricbuzz: read the new match now
         last_cdetail = 0.0             # overs/batters for a new match right away
+        if CRIC_CB and add in cric_ids:
+            cric_detail_at.pop(add, None)
     cric_update(items)                 # and redraw the board with what we just fetched
 
     out = ['<div class=note>%s</div>' % msg] if msg else []
@@ -5357,9 +5652,10 @@ def cricket_page(request: Request):
                % (CRIC_MAX, CRIC_MATCH_SECONDS))
     out.append('<h3>Following (%d)</h3>' % len(cric_ids))
     for mid in cric_ids:
-        m = feed.get(mid)
+        m = info(mid)
         state = ("on the board now &middot; " if mid == cric_id and m else "") + (
-            _cric_state(m) if m else "left the live feed (finished?) - forgotten after 30 min")
+            _cric_state(m) if m else ("waiting for its first read" if CRIC_CB and mid not in cric_gone else
+                                      "left the live feed (finished?) - forgotten after 30 min"))
         out.append('<div class=row><span class=name><b>%s</b><small>%s</small></span>%s'
                    '<a class="arr del" href="/cricket?del=%s">&#10005;</a></div>'
                    % (name(mid) if m else "Match %s" % esc(mid), state,
@@ -5368,7 +5664,8 @@ def cricket_page(request: Request):
     if not cric_ids:
         out.append('<p><small>Not following any match - pick some below.</small></p>')
     rest = [m for m in items if m.get("id") and m["id"] not in cric_ids]
-    out.append('<h3>%s (%d)</h3>' % ("Live on Cricinfo" if CRIC_RSS else "Current matches", len(rest)))
+    out.append('<h3>%s (%d)</h3>' % ("Live on Cricinfo" if CRIC_RSS else (
+        "On Cricbuzz now (live, recent and next)" if CRIC_CB else "Current matches"), len(rest)))
     full = len(cric_ids) >= CRIC_MAX
     for m in rest:
         out.append('<div class=row>%s<span class=name><b>%s</b><small>%s</small></span></div>'
@@ -5381,8 +5678,10 @@ def cricket_page(request: Request):
     if CRIC_TEAM:
         out.append('<p><small>Also following %s automatically (Settings &rarr; Cricket).</small></p>'
                    % esc(CRIC_TEAM.title()))
-    if not CRIC_RSS:
+    if not CRIC_RSS and not CRIC_CB:
         out.append('<p><small>API hits today: %s</small></p>' % esc(cric_hits))
+    out.append('<p><small>Scores from %s. <a href="/cricket/debug">What the board last got</a></small></p>'
+               % ("Cricbuzz" if CRIC_CB else "ESPNcricinfo" if CRIC_RSS else "CricketData.org"))
     page = SET_PAGE.replace("Dashboard settings</title>", "Cricket</title>").replace(
         "<h2>Dashboard settings</h2>", "<h2>Cricket matches</h2>").replace("</style>", STOCK_CSS + "</style>")
     return _page(request, page % "".join(out))
@@ -5422,11 +5721,11 @@ if KITE_KEY and KITE_SECRET:
         show_login_needed("Kite login needed")
 else:
     port_ticker.set("#" + kite_status)
-if CRIC_TEAM and (CRIC_RSS or CRIC_KEY):
+if CRIC_TEAM and CRIC_ON:
     safe(auto_pick, "cricket")
-elif cric_ids and (CRIC_RSS or CRIC_KEY):        # matches followed before the restart
+if cric_ids and CRIC_ON and (CRIC_CB or not CRIC_TEAM):    # matches followed before the restart
     safe(get_cricket, "cricket")
-if not CRIC_RSS and not CRIC_KEY:
+if not CRIC_ON:
     cric_ticker.set("#Add CRICKET_API_KEY to settings.toml (free key from cricketdata.org)")
 elif not cric_ids:
     cric_ticker.set("#Pick matches at http://%s:%d/cricket" % (MY_IP, LOGIN_PORT))
@@ -5492,7 +5791,15 @@ while True:
             if not safe(get_portfolio, "kite", free=(every > 30)):
                 port_ticker.set("#Portfolio update failed - will retry" + stamp())
 
-        if cric_ids and (CRIC_RSS or CRIC_KEY):
+        if cric_ids and CRIC_CB:
+            # Cricbuzz: one match per read; the one on screen every ~20 s, others less often
+            on = ORDER[screen] == "cricket"
+            if now_m - last_cric > (4 if on else 20):
+                due = cb_due(now_m, on)
+                if due:
+                    last_cric = now_m
+                    safe(lambda: cb_fetch(due), "cricket")
+        elif cric_ids and CRIC_ON:
             every = CRIC_EVERY if (CRIC_RSS or cric_any_live()) else 15 * 60
             if now_m - last_cric > every:
                 last_cric = now_m
@@ -5502,8 +5809,8 @@ while True:
                     now_m - cric_detail_at.get(cric_id, -1e9) > (60 if ORDER[screen] == "cricket" else 180):
                 last_cdetail = now_m
                 safe(lambda: get_cricket_detail(cric_item), "cricket detail")
-        if CRIC_TEAM and (CRIC_RSS or (CRIC_KEY and not cric_any_live())) and \
-                now_m - last_pick > (5 if CRIC_RSS else 30) * 60:
+        if CRIC_TEAM and (CRIC_RSS or CRIC_CB or (CRIC_KEY and not cric_any_live())) and \
+                now_m - last_pick > (5 if CRIC_RSS else 10 if CRIC_CB else 30) * 60:
             last_pick = now_m            # follow the team's new matches
             safe(auto_pick, "cricket")
 
