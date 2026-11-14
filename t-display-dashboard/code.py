@@ -5589,6 +5589,7 @@ def ask_go(request: Request):
     if not GEMINI_KEY:
         return _page(request, ask_html("No Gemini key on the board yet."))
     a = None
+    t_ask = time.monotonic()
     try:
         for attempt in (1, 2):
             dog()
@@ -5602,7 +5603,9 @@ def ask_go(request: Request):
                     raise
                 log_err("ask: %r, free %d - retrying" % (e, getattr(gc, "mem_free", lambda: 0)()))
     except Exception as e:  # noqa: BLE001
-        log_err("ask failed: %r" % (e,))
+        # "Repeated socket failures" hides the real reason: log what was underneath, and how long it took
+        log_err("ask failed after %d s: %r <- %r" % (time.monotonic() - t_ask, e,
+                                                     getattr(e, "__cause__", None) or getattr(e, "__context__", None)))
         free_sockets()
         hint = ""
         if "X509" in str(e):
