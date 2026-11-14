@@ -93,6 +93,15 @@ KITE_EXPIRED = os.environ.get("KITE_EXPIRED") == "1"
 class Session:
     def __init__(self, *a): pass
     def post(self, url, data=None, timeout=None, headers=None):
+        if "generativelanguage" in url:
+            import json as _j
+            q = _j.loads(data)["contents"][0]["parts"][0]["text"]
+            print("GEMINI", url.split("/models/")[1], "| key header:", "x-goog-api-key" in (headers or {}), "|", q[:50])
+            if os.environ.get("ASK_FAIL"):
+                r = Resp({"error": {"code": 401, "message": "API key not valid. Please pass a valid API key.", "status": "UNAUTHENTICATED"}}); r.status_code = 401; return r
+            ans = {"short": "Paris.", "long": ("A UPS keeps devices running through a power cut by switching to its battery within milliseconds. " * 5).strip()}.get(q,
+                   "Sachin Tendulkar scored 100 international centuries: 51 in Tests and 49 in ODIs, the most by any batter. \u2014 **Legend**")
+            return Resp({"candidates": [{"content": {"parts": [{"text": "plan", "thought": True}, {"text": ans}], "role": "model"}, "finishReason": "STOP"}]})
         print("POST", url, data[:60])
         return Resp({"status":"success","data":{"access_token":"tok123"}})
     def get(self, url, timeout=None, headers=None):

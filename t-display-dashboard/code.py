@@ -2551,7 +2551,7 @@ def _todo_load():
 
 def todo_save(items):
     b = json.dumps(items).encode()
-    room = len(microcontroller.nvm) - TODO_NVM - 2
+    room = len(microcontroller.nvm) - 1200 - TODO_NVM - 2      # the last 1200 bytes hold the Ask AI answer
     if len(b) > room:
         raise ValueError("the list is full (%d of %d bytes) - clear some done tasks" % (len(b), room))
     microcontroller.nvm[TODO_NVM:TODO_NVM + 2 + len(b)] = bytes([len(b) & 255, len(b) >> 8]) + b
@@ -2963,6 +2963,119 @@ stocks_screen = StocksScreen()
 EXTRA["stocks"] = stocks_screen
 
 
+# ------------------------------------------------------------- ask AI (Gemini)
+# Type a question at http://<board>:8080/ask; the answer stays on this screen until you
+# ask something else (and survives restarts).  Needs GEMINI_API_KEY in settings.toml.
+GEMINI_KEY = os.getenv("GEMINI_API_KEY") or ""
+GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent"
+ASK_NVM = len(microcontroller.nvm) - 1200      # the last answer lives after the to-do list
+ASK_CHARS = 420                                # what the screen holds in its smallest type
+ASK_RULES = ("You are answering on a tiny 320x170 pixel desk display. Reply in plain text only, "
+             "at most %d characters, shorter when you can. No markdown, no bullet symbols, no "
+             "emojis, no line breaks, ASCII characters only. Give the answer itself, no preamble." % ASK_CHARS)
+
+
+def gemini_model():
+    return cfg("GEMINI_MODEL") or "gemini-flash-latest"
+
+
+def ask_gemini(prompt):
+    """One question to Gemini -> its answer as plain text. Raises with Google's message on errors."""
+    body = json.dumps({"systemInstruction": {"parts": [{"text": ASK_RULES}]},
+                       "contents": [{"role": "user", "parts": [{"text": prompt}]}]})
+    with requests.post(GEMINI_URL % gemini_model(), data=body, timeout=40,
+                       headers={"Content-Type": "application/json", "x-goog-api-key": GEMINI_KEY}) as r:
+        status = r.status_code
+        d = r.json()
+    if "error" in d:
+        raise RuntimeError("Gemini: %s" % (d["error"].get("message") or "HTTP %d" % status)[:160])
+    cands = d.get("candidates") or []
+    parts = ((cands[0].get("content") or {}).get("parts") or []) if cands else []
+    txt = " ".join(p.get("text", "") for p in parts if not p.get("thought")).strip()
+    if not txt:
+        why = (cands[0].get("finishReason") if cands else (d.get("promptFeedback") or {}).get("blockReason")) or "?"
+        raise RuntimeError("Gemini gave no answer (%s)" % why)
+    for uni, plain in (("\u2014", "-"), ("\u2013", "-"), ("\u2018", "'"), ("\u2019", "'"), ("\u201c", '"'),
+                       ("\u201d", '"'), ("\u2026", "..."), ("\u00d7", "x"), ("\u2022", "-"), ("\u00b0", " deg ")):
+        txt = txt.replace(uni, plain)           # the screen fonts are ASCII
+    return " ".join(txt.replace("*", "").replace("`", "").split())
+
+
+class AskScreen(Screen):
+    TOP, BOTTOM, WIDTH = 43, 168, 308
+    SIZES = ((F_NEWS, 29), (F_NEWS2, 25), (F_MED, 18), (F_SMALL, 12))   # font, line height
+
+    def __init__(self):
+        global root
+        Screen.__init__(self)
+        root = self.grp
+        self.sub, self.clock = _head("ASK AI", 0x4C8DF6)
+        self.q_lbl = text(F_SMALL, "", 6, 26, 0x7FB0FF)
+        self.lines = [text(F_SMALL, "", 6, self.TOP, WHITE) for _ in range(10)]
+        self.q = self.a = self.when = ""
+        try:
+            nv = microcontroller.nvm
+            n = nv[ASK_NVM] | (nv[ASK_NVM + 1] << 8)
+            if 2 <= n <= len(nv) - ASK_NVM - 2:
+                d = json.loads(bytes(nv[ASK_NVM + 2:ASK_NVM + 2 + n]).decode())
+                self.q, self.a, self.when = d.get("q", ""), d.get("a", ""), d.get("t", "")
+        except Exception as e:  # noqa: BLE001
+            print("saved answer unreadable:", repr(e))
+        self.dirty = True
+
+    def skip(self):
+        return not self.a
+
+    def set(self, q, a, keep=True):
+        self.q, self.a = q, a
+        t = time.localtime()
+        self.when = "%d %s %02d:%02d" % (t.tm_mday, MONTHS[t.tm_mon - 1], t.tm_hour, t.tm_min)
+        self.dirty = True
+        if not keep:
+            return
+        nv = microcontroller.nvm
+        n = nv[TODO_NVM] | (nv[TODO_NVM + 1] << 8)
+        if ASK_NVM - TODO_NVM - 2 < n <= len(nv) - TODO_NVM - 2:
+            return                              # an old, very long to-do list still sits there
+        b = json.dumps({"q": q, "a": a, "t": self.when}).encode()
+        if len(b) > len(nv) - ASK_NVM - 2:
+            b = json.dumps({"q": q[:60], "a": a[:ASK_CHARS], "t": self.when}).encode()
+        nv[ASK_NVM:ASK_NVM + 2 + len(b)] = bytes([len(b) & 255, len(b) >> 8]) + b
+
+    def enter(self, now):
+        self.draw()
+
+    def frame(self, now):
+        if self.dirty:
+            self.draw()
+
+    def draw(self):
+        self.dirty = False
+        _set(self.sub, self.when.upper())
+        _set(self.q_lbl, _fit(F_SMALL, "> " + _screen_text(self.q), self.WIDTH) if self.q else "")
+        a = _screen_text(self.a) or "Ask something at http://%s:%d/ask" % (MY_IP, LOGIN_PORT)
+        room = self.BOTTOM - self.TOP
+        for font, lh in self.SIZES:             # the biggest type the whole answer fits in
+            rows, fits = wrap_px(font, a, self.WIDTH, room // lh)
+            if fits:
+                break
+        if not fits and rows:                   # even the smallest is too small: end with ...
+            rows[-1] = _fit(F_SMALL, rows[-1] + " ...", self.WIDTH - 12).rstrip(".") + "..."
+        y0 = self.TOP + max(0, (room - len(rows) * lh) // 2) if len(rows) <= 2 else self.TOP
+        for i, lbl in enumerate(self.lines):
+            if i < len(rows):
+                if lbl.font is not font:
+                    lbl.font = font
+                lbl.anchored_position = (6, y0 + i * lh)
+                _set(lbl, rows[i])
+            else:
+                _set(lbl, "")
+
+
+ask_screen = AskScreen()
+EXTRA["ask"] = ask_screen
+
+
 # ------------------------------------------------------------- night screensavers
 # NIGHT_SCREEN = "clock" (default), "matrix", "fire", "stars" or "cycle" (changes every hour).
 # They can also go in SCREEN_ORDER for the daytime rotation.
@@ -3148,7 +3261,7 @@ for _n, _s in EXTRA.items():
     ALL_SCREENS[_n] = _s.grp
 TICKERS = {"weather": weather_ticker, "portfolio": port_ticker, "markets": mkt_ticker,
            "cricket": cric_ticker}
-DEFAULT_ORDER = "weather,todo,portfolio,stocks,heatmap,markets,cricket,stat,news,trivia,net,pet"
+DEFAULT_ORDER = "weather,ask,todo,portfolio,stocks,heatmap,markets,cricket,stat,news,trivia,net,pet"
 
 
 def parse_order(text_):
@@ -4864,7 +4977,7 @@ def home(request: Request):
                 '<p><button style="padding:10px 18px">Send to board</button></p></form>')
         body = PAGE % ("Status: " + kite_status, link + form)
     body = body.replace("</body>", '<p style="margin-top:32px"><a href="/todo">To-do list</a> '
-                        '<a href="/stocks">My stocks</a> <a href="/settings">Settings</a></p>'
+                        '<a href="/stocks">My stocks</a> <a href="/ask">Ask AI</a> <a href="/settings">Settings</a></p>'
                         '<p style="margin-top:16px"><a href="/cricket" '
                         'style="background:#444">Cricket matches</a></p>'
                         '<p style="margin-top:16px"><a href="/rotate?on=%d" style="background:#444">'
@@ -4975,7 +5088,7 @@ def stat_debug(request: Request):
 # ------------------------------------------------------------- settings page
 SCREEN_LABELS = {"weather": "Weather", "portfolio": "Portfolio", "heatmap": "Holdings heatmap",
                  "markets": "Markets", "cricket": "Cricket", "stat": "Stat of the day",
-                 "news": "News", "trivia": "Trivia", "net": "Internet", "pet": "Pet", "todo": "To-do", "stocks": "My stocks",
+                 "news": "News", "trivia": "Trivia", "net": "Internet", "pet": "Pet", "todo": "To-do", "stocks": "My stocks", "ask": "Ask AI",
                  "clock": "Big clock", "matrix": "Matrix rain", "fire": "Fire", "stars": "Starfield"}
 RESTART_KEYS = ("WEATHER_TOWN", "WEATHER_LAT", "WEATHER_LON", "TRIVIA_SOURCE", "PET_NAME", "NEWS_COUNT")
 force_show = None            # the loop switches to this screen on its next pass
@@ -5407,6 +5520,78 @@ def todo_do(request: Request):
     except Exception as e:  # noqa: BLE001
         return _page(request, todo_html("Couldn't save: %s" % esc(str(e))))
     return _page(request, '<!doctype html><meta http-equiv="refresh" content="0;url=/todo">')
+
+
+# ------------------------------------------------------------- Ask AI page
+ASK_CSS = ("textarea{width:100%%;box-sizing:border-box;font-size:17px;padding:10px;background:#1c1c1c;"
+           "color:#eee;border:1px solid #444;border-radius:8px;font-family:inherit}"
+           ".q{color:#8ab4f8;margin:14px 0 4px}.a{font-size:17px;line-height:1.45;white-space:pre-wrap}")
+
+
+def ask_html(msg=""):
+    out = ['<div class=note>%s</div>' % msg] if msg else []
+    out.append('<p><a href="/">&larr; Back</a> &nbsp; <a href="/ask/do?op=show">Show on the board</a></p>')
+    if not GEMINI_KEY:
+        out.append('<div class=note>Add <b>GEMINI_API_KEY = "your key"</b> to settings.toml on the board, '
+                   'then restart it. The key is never shown on these pages.</div>')
+    out.append('<form action="/ask/go"><textarea name=q rows=3 maxlength=300 placeholder="Ask anything - '
+               'the answer stays on the board until you ask again" autofocus></textarea>'
+               '<p><button>Ask</button> <small>Answers are kept short to fit the screen. '
+               'Takes a few seconds.</small></p></form>')
+    if ask_screen.a:
+        out.append('<h3>On the board now</h3><div class=q>&gt; %s</div><div class=a>%s</div>'
+                   '<p><small>%s &middot; %s &middot; <a href="/ask/do?op=clear">clear</a></small></p>'
+                   % (esc(ask_screen.q), esc(ask_screen.a), esc(ask_screen.when), esc(gemini_model())))
+    page = SET_PAGE.replace("Dashboard settings</title>", "Ask AI</title>").replace(
+        "<h2>Dashboard settings</h2>", "<h2>Ask AI</h2>").replace("</style>", ASK_CSS + "</style>")
+    return page % "".join(out)
+
+
+@server.route("/ask")
+def ask_page(request: Request):
+    return _page(request, ask_html())
+
+
+@server.route("/ask/go")
+def ask_go(request: Request):
+    global force_show
+    q = request.query_params.get("q", safe=False)
+    q = " ".join(unquote(q).split())[:300] if q else ""
+    if not q:
+        return _page(request, ask_html())
+    if not GEMINI_KEY:
+        return _page(request, ask_html("No Gemini key on the board yet."))
+    dog()
+    try:
+        a = ask_gemini(q)
+    except Exception as e:  # noqa: BLE001
+        log_err("ask failed: %r" % (e,))
+        free_sockets()
+        return _page(request, ask_html("That didn't work: %s<br>The board still shows the last answer."
+                                       % esc(str(e))))
+    try:
+        ask_screen.set(q, a)
+    except Exception as e:  # noqa: BLE001 - shown anyway, just not kept over a restart
+        log_err("saving the answer failed: %r" % (e,))
+    if _screen_on("ask", "weather"):
+        try:
+            save_cfg()
+        except Exception:  # noqa: BLE001
+            pass
+    force_show = "ask"
+    return _page(request, ask_html())
+
+
+@server.route("/ask/do")
+def ask_do(request: Request):
+    global force_show
+    op = request.query_params.get("op", safe=False)
+    if op == "show" and ask_screen.a:
+        _screen_on("ask", "weather")
+        force_show = "ask"
+    elif op == "clear":
+        ask_screen.set("", "")
+    return _page(request, '<!doctype html><meta http-equiv="refresh" content="0;url=/ask">')
 
 
 # ------------------------------------------------------------- My stocks page

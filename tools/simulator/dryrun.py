@@ -102,6 +102,10 @@ def client():
     print("following:", NS["cric_ids"], "| board shows:", NS["cric_id"], NS["lbl_cpage"].text)
     urllib.request.urlopen("http://127.0.0.1:8080/cricket?del=" + NS["cric_ids"][0], timeout=8).read()
     print("after stop:", NS["cric_ids"], "| saved:", NS["CFG"].get(NS["CRIC_CFG"]))
+    # ASK TEST: a question typed into the page's form, sent the way a browser sends it
+    NS["GEMINI_KEY"] = "testkey"
+    page = urllib.request.urlopen("http://127.0.0.1:8080/ask/go?" + _enc({"q": "how many centuries did Sachin score? 100%"}), timeout=8).read().decode()
+    print("ask:", repr(NS["ask_screen"].q), "->", NS["ask_screen"].a[:50], "| on page:", "On the board now" in page)
     # THEME TEST: choosing a look saves it to NVM and asks for a restart
     r = urllib.request.urlopen("http://127.0.0.1:8080/theme?name=classic", timeout=4).read().decode()
     print("theme page:", r.split("<p>")[1][:60] if "<p>" in r else r[:80], "| nvm[0] =", NS["microcontroller"].nvm[0] if "microcontroller" in NS else "?")
