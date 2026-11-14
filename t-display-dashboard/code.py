@@ -5566,9 +5566,19 @@ def ask_go(request: Request):
         return _page(request, ask_html())
     if not GEMINI_KEY:
         return _page(request, ask_html("No Gemini key on the board yet."))
-    dog()
+    a = None
     try:
-        a = ask_gemini(q)
+        for attempt in (1, 2):
+            dog()
+            free_sockets()          # the secure connection to Google needs the memory that
+            gc.collect()            # connections kept open to other sites are holding
+            try:
+                a = ask_gemini(q)
+                break
+            except OSError as e:    # e.g. MBEDTLS_ERR_X509_FATAL_ERROR: try once more, clean
+                if attempt == 2:
+                    raise
+                log_err("ask: %r, free %d - retrying" % (e, getattr(gc, "mem_free", lambda: 0)()))
     except Exception as e:  # noqa: BLE001
         log_err("ask failed: %r" % (e,))
         free_sockets()
