@@ -2980,11 +2980,32 @@ def gemini_model():
     return cfg("GEMINI_MODEL") or "gemini-flash-latest"
 
 
+ask_session = None          # a requests session that trusts the certificates in /google_roots.pem
+
+
+def gemini_requests():
+    """The board's built-in certificate list doesn't cover Google's API servers
+    (MBEDTLS_ERR_X509_FATAL_ERROR), so Gemini calls check against /google_roots.pem when it's there."""
+    global ask_session
+    if ask_session is None:
+        try:
+            with open("/google_roots.pem") as f:
+                pem = f.read()
+            import ssl
+            ctx = ssl.create_default_context()
+            ctx.load_verify_locations(cadata=pem)
+            ask_session = adafruit_requests.Session(pool, ctx)
+        except Exception as e:  # noqa: BLE001 - no file: the built-in list
+            log_err("google_roots.pem not used: %r" % (e,))
+            ask_session = requests
+    return ask_session
+
+
 def ask_gemini(prompt):
     """One question to Gemini -> its answer as plain text. Raises with Google's message on errors."""
     body = json.dumps({"systemInstruction": {"parts": [{"text": ASK_RULES}]},
                        "contents": [{"role": "user", "parts": [{"text": prompt}]}]})
-    with requests.post(GEMINI_URL % gemini_model(), data=body, timeout=40,
+    with gemini_requests().post(GEMINI_URL % gemini_model(), data=body, timeout=40,
                        headers={"Content-Type": "application/json", "x-goog-api-key": GEMINI_KEY}) as r:
         status = r.status_code
         d = r.json()
@@ -5583,8 +5604,13 @@ def ask_go(request: Request):
     except Exception as e:  # noqa: BLE001
         log_err("ask failed: %r" % (e,))
         free_sockets()
-        return _page(request, ask_html("That didn't work: %s<br>The board still shows the last answer."
-                                       % esc(str(e))))
+        hint = ""
+        if "X509" in str(e):
+            hint = ("<br>The board couldn't verify Google's certificate. Upload <b>google_roots.pem</b> next to "
+                    "code.py and restart the board." if ask_session is requests else
+                    "<br>Google's certificate didn't match google_roots.pem - that file needs updating.")
+        return _page(request, ask_html("That didn't work: %s%s<br>The board still shows the last answer."
+                                       % (esc(str(e)), hint)))
     try:
         ask_screen.set(q, a)
     except Exception as e:  # noqa: BLE001 - shown anyway, just not kept over a restart
