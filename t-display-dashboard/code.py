@@ -37,6 +37,7 @@
 import os
 import time
 import struct
+import gc
 import json
 import random
 import ipaddress
