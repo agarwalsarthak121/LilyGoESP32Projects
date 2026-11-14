@@ -4355,11 +4355,13 @@ def cb_list():
         cric_debug["list_status"] = status
         if status != 200:
             raise RuntimeError("Cricbuzz list HTTP %d" % status)
+        t0 = time.monotonic()
         for chunk in r.iter_content(chunk_size=4096):
+            dog()
             size += len(chunk)
             buf = tail + _text(chunk)
             tail = buf[_cb_links(buf, items, seen):]
-            if size > 1200000 or len(items) >= 40:
+            if size > 1200000 or len(items) >= 40 or time.monotonic() - t0 > 15:
                 break
     cric_debug["list_bytes"] = size
     cric_debug["list_found"] = len(items)
@@ -4391,12 +4393,14 @@ def _cb_json(url):
     list that comes with them is never kept. Anything that isn't JSON isn't read at all."""
     want = {'"matchHeader":': None, '"miniscore":': None}
     buf, size, first = "", 0, ""
+    t0 = time.monotonic()
     with requests.get(url, headers=CB_HDR, timeout=NET_TIMEOUT) as r:
         status = r.status_code
         ctype = (r.headers.get("content-type") or "").lower()
         if status != 200 or "json" not in ctype:
             return status, ctype, None, None, 0, ""
         for chunk in r.iter_content(chunk_size=4096):
+            dog()
             size += len(chunk)
             buf += _text(chunk)
             if not first:
@@ -4421,8 +4425,9 @@ def _cb_json(url):
                     want[key] = "{}"                 # far too big: give up on it
                 else:
                     keep = min(keep, at)             # not finished yet: keep it
-            if (want['"matchHeader":'] is not None and want['"miniscore":'] is not None) or size > 1500000:
-                break
+            if (want['"matchHeader":'] is not None and want['"miniscore":'] is not None) or \
+                    size > 600000 or time.monotonic() - t0 > 12:
+                break                                # got both, or too big / too slow: stop here
             buf = buf[max(0, keep):]
     return status, ctype, want['"matchHeader":'], want['"miniscore":'], size, first
 
@@ -5952,6 +5957,11 @@ except Exception as e:  # noqa: BLE001 - pin busy on some builds
 boot_was = True
 
 # ------------------------------------------------------------- start-up
+if ORDER[0] in EXTRA:            # draw the first screen now, so it isn't blank while data loads
+    try:
+        EXTRA[ORDER[0]].enter(time.monotonic())
+    except Exception as e:  # noqa: BLE001
+        log_err("first screen: %r" % (e,))
 if not internet_ok():            # Wi-Fi up but no internet: don't stall on every start-up fetch
     set_offline("noinet", time.monotonic())
 weather_ticker.set("Fetching weather for " + TOWN + "...")
@@ -5970,10 +5980,10 @@ if KITE_KEY and KITE_SECRET:
         show_login_needed("Kite login needed")
 else:
     port_ticker.set("#" + kite_status)
-if CRIC_TEAM and CRIC_ON:
+if CRIC_TEAM and CRIC_ON and not CRIC_CB:                  # (Cricbuzz: the main loop looks, 10 min in)
     safe(auto_pick, "cricket")
-if cric_ids and CRIC_ON and (CRIC_CB or not CRIC_TEAM):    # matches followed before the restart
-    safe(get_cricket, "cricket")
+if cric_ids and CRIC_ON and not CRIC_CB and not CRIC_TEAM:    # matches followed before the restart
+    safe(get_cricket, "cricket")                              # (Cricbuzz ones are read by the main loop)
 if not CRIC_ON:
     cric_ticker.set("#Add CRICKET_API_KEY to settings.toml (free key from cricketdata.org)")
 elif not cric_ids:
