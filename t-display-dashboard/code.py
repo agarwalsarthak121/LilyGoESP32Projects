@@ -2934,10 +2934,10 @@ class StocksScreen(Screen):
                 root.append(sep)
             self.rows.append(shapes + [
                 text(self.F1, "", 22, y - 3, WHITE),                    # symbol
-                text(self.F1, "", 316, y - 3, WHITE, right=True),       # P&L
-                text(F_SMALL, "", 0, 0, WHITE),                         # (not used)
+                text(self.F1, "", 316, y - 3, WHITE, right=True),       # LTP
+                text(self.F2, "", 316, y + 22, WHITE, right=True),      # P&L
                 text(self.F2, "", 22, y + 22, 0xC9A227),                # stop-loss / target
-                text(self.F2, "", 316, y + 22, WHITE, right=True),      # today's change
+                text(self.F2, "", 240, y + 22, WHITE, right=True),      # today's change
                 text(F_SMALL, "", 0, 0, WHITE),                         # (not used)
                 text(self.F2, "", 22, y + 22, 0xFFB020),                # MIS / NRML / CNC
                 sep])
@@ -3026,15 +3026,14 @@ class StocksScreen(Screen):
             dn.hidden = not chg < 0
             flat.hidden = chg != 0
             sep.hidden = False
-            # line 1: symbol ........ P&L          line 2: stop-loss / target ........ today's change
+            # line 1: symbol ........ LTP        line 2: stop-loss / target .... today's change   P&L
             F1, F2 = self.F1, self.F2
-            _set(ltp_l, inr(pnl, signed=True), p_col)
+            _set(ltp_l, price(ltp))
             room = 316 - px_width(F1, ltp_l.text) - 34
             name = _screen_text(sym)
             if px_width(F1, name) > room:
                 name = fo_short(name)            # options/futures: drop the expiry before cutting
             _set(sym_l, _fit(F1, name, room))
-            _set(chg_l, "%s  %+.2f%%" % (price(chg, True), chg / close * 100 if close else 0.0), c_col)
             _set(tag_l, prod)                    # positions: the product, in amber
             hx = 22 + (px_width(F2, prod) + 6 if prod else 0)
             if held_l.anchored_position[0] != hx:
@@ -3048,10 +3047,20 @@ class StocksScreen(Screen):
                                                     ("T " + _lvl(al[1])) if al[1] else "") if x), 0xC9A227
             else:
                 held, h_col = "", 0x8A9099
-            room = 316 - px_width(F2, chg_l.text) - 10 - hx
-            if px_width(F2, held) > room:
+            pnl_t = inr(pnl, signed=True)
+            pct_t = "%+.2f%%" % (chg / close * 100 if close else 0.0)
+            day_t = price(chg, True) + " " + pct_t
+            day_x = 316 - px_width(F2, pnl_t) - 14
+            # make it fit: first today's change as % only, then the levels without spaces
+            if hx + px_width(F2, held) + 10 + px_width(F2, day_t) > day_x:
+                day_t = pct_t
+            if hx + px_width(F2, held) + 10 + px_width(F2, day_t) > day_x:
                 held = held.replace("SL ", "SL").replace("T ", "T").replace("  ", " ")
-            _set(held_l, _fit(F2, held, room), h_col)
+            _set(pnl_l, pnl_t, p_col)
+            if chg_l.anchored_position[0] != day_x:
+                chg_l.anchored_position = (day_x, chg_l.anchored_position[1])
+            _set(chg_l, day_t, c_col)
+            _set(held_l, _fit(F2, held, day_x - px_width(F2, day_t) - 10 - hx), h_col)
         if rows:
             a = b = ""
         elif not self.picks:
