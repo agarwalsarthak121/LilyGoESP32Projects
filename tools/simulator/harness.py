@@ -93,6 +93,11 @@ KITE_EXPIRED = os.environ.get("KITE_EXPIRED") == "1"
 class Session:
     def __init__(self, *a): pass
     def post(self, url, data=None, timeout=None, headers=None):
+        if "ntfy" in url:
+            print("NTFY", url, "|", headers, "|", data.decode())
+            if os.environ.get("NTFY_FAIL"):
+                raise OSError(113, "EHOSTUNREACH")
+            return Resp({}, b"{}")
         if "generativelanguage" in url:
             import json as _j
             q = _j.loads(data)["contents"][0]["parts"][0]["text"]

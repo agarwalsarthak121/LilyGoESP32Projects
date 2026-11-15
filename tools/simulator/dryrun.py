@@ -111,6 +111,13 @@ def client():
     print("playing:", NS["play_name"], round((NS["play_until"] - time.monotonic()) / 60), "min")
     urllib.request.urlopen("http://127.0.0.1:8080/anim/play?a=stop", timeout=8).read()
     print("stopped:", NS["play_until"] == 0.0)
+    # ALERT TEST: fill in the stop-loss/target form of a picked stock over real HTTP, then cross the stop
+    NS["stocks_screen"].set_picks(["RELIANCE"])
+    urllib.request.urlopen("http://127.0.0.1:8080/stocks/ntfy?" + _enc({"topic": "dry-run-topic"}), timeout=8).read()
+    urllib.request.urlopen("http://127.0.0.1:8080/stocks/alert?" + _enc({"s": "RELIANCE", "sl": "2800", "t": "3100.5"}), timeout=8).read()
+    print("alert:", NS["CFG"]["STOCK_ALERTS"], "| topic:", NS["CFG"]["NTFY_TOPIC"])
+    NS["check_alerts"]([("RELIANCE", "RELIANCE", "", 20, 2450.0, 2790.0, 2880.1, 6800.0, 13.9, -1802.0)])
+    print("after the fall:", NS["CFG"]["STOCK_ALERTS"]["RELIANCE"][2][:2], "|", NS["ntfy_status"])
     # THEME TEST: choosing a look saves it to NVM and asks for a restart
     r = urllib.request.urlopen("http://127.0.0.1:8080/theme?name=classic", timeout=4).read().decode()
     print("theme page:", r.split("<p>")[1][:60] if "<p>" in r else r[:80], "| nvm[0] =", NS["microcontroller"].nvm[0] if "microcontroller" in NS else "?")

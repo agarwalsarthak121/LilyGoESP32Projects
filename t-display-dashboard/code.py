@@ -2812,6 +2812,96 @@ def _set(lbl, t, colour=None):
         lbl.color = colour
 
 
+# ---- stop-loss / target alerts for My stocks (set at /stocks), sent to your phone through ntfy.
+# CFG["STOCK_ALERTS"] = {key: [stop-loss, target, hit]}; hit is "" or [kind, price, when] once it
+# has triggered (it triggers once, until you set it again).  NTFY_TOPIC is your ntfy topic.
+ntfy_status = ""                # how the last notification went, for the /stocks page
+ntfy_retry_at = 0.0
+
+
+def stock_alerts():
+    a = CFG.get("STOCK_ALERTS")
+    if not isinstance(a, dict):
+        a = CFG["STOCK_ALERTS"] = {}
+    return a
+
+
+def _lvl(v):
+    """2800.0 -> '2800', 412.5 -> '412.5'."""
+    return ("%d" % v) if v == int(v) else ("%.2f" % v).rstrip("0")
+
+
+def _hhmm():
+    t = time.localtime()
+    return "%02d:%02d" % (t.tm_hour, t.tm_min)
+
+
+def ntfy_send(title, msg, tags="bell", priority="high"):
+    """Push a notification to the ntfy topic. Raises if it didn't go."""
+    global ntfy_status
+    topic = (cfg("NTFY_TOPIC") or "").strip()
+    if not topic:
+        raise RuntimeError("no ntfy topic set")
+    url = (cfg("NTFY_SERVER") or "https://ntfy.sh").rstrip("/") + "/" + topic
+    try:
+        with requests.post(url, data=msg.encode("utf-8"), timeout=NET_TIMEOUT,
+                           headers={"Title": title, "Priority": priority, "Tags": tags}) as r:
+            status = r.status_code
+        if status != 200:
+            raise RuntimeError("ntfy answered HTTP %d" % status)
+    except Exception as e:
+        ntfy_status = "failed at %s: %s" % (_hhmm(), repr(e)[:80])
+        raise
+    ntfy_status = "sent at %s: %s" % (_hhmm(), title)
+
+
+def check_alerts(rows):
+    """Called with fresh prices: notify once when a stop-loss or target is crossed."""
+    global ntfy_retry_at
+    alerts = CFG.get("STOCK_ALERTS")
+    if not alerts or not rows:
+        return
+    now = time.monotonic()
+    changed = False
+    for r in rows:
+        a = alerts.get(r[0])
+        if not a or a[2]:
+            continue
+        _key, sym, prod, qty, avg, ltp, close, pnl, pnl_pct, _day = r
+        if not ltp:
+            continue
+        short = qty < 0                 # a short loses when the price rises
+        if a[0] and (ltp >= a[0] if short else ltp <= a[0]):
+            kind, word, level, tag = "sl", "stop-loss", a[0], "rotating_light"
+        elif a[1] and (ltp <= a[1] if short else ltp >= a[1]):
+            kind, word, level, tag = "tgt", "target", a[1], "dart"
+        else:
+            continue
+        if (cfg("NTFY_TOPIC") or "").strip():
+            if now < ntfy_retry_at:
+                continue                # the last send failed: wait a minute before trying again
+            msg = "%s%s is at %s - %s your %s of %s.\nToday %+.2f%%. Your P&L %s (%+.1f%%)." % (
+                sym, (" (" + prod + ")") if prod else "", price(ltp),
+                "at or past", word, _lvl(level),
+                (ltp - close) / close * 100 if close else 0.0, inr(pnl, signed=True), pnl_pct)
+            try:
+                ntfy_send("%s: %s hit" % (sym, word), msg, tag)
+            except Exception as e:  # noqa: BLE001 - stays armed, tried again in a minute
+                log_err("ntfy failed: %r" % (e,))
+                free_sockets()
+                ntfy_retry_at = now + 60
+                continue
+        t = time.localtime()
+        a[2] = [kind, ltp, "%d %s %02d:%02d" % (t.tm_mday, MONTHS[t.tm_mon - 1], t.tm_hour, t.tm_min)]
+        changed = True
+    if changed:
+        stocks_screen.dirty = True
+        try:
+            save_cfg()
+        except Exception as e:  # noqa: BLE001
+            log_err("saving alerts failed: %r" % (e,))
+
+
 class StocksScreen(Screen):
     MID = 206                       # right edge of the price column
 
@@ -2856,6 +2946,8 @@ class StocksScreen(Screen):
         # (key, symbol, product, qty, avg, ltp, close, P&L, P&L %, today's P&L); product is "" for holdings
         self.data = None
         self.picks = stock_picks()
+        self.alt = True
+        self.last_alt = 0.0
         self.shown = []
         self.page = 0
         self.last_page = 0.0
@@ -2907,6 +2999,11 @@ class StocksScreen(Screen):
             self.last_page = now
             self.page = (self.page + 1) % self.pages()
             self.draw()
+        if now - self.last_alt > 3:              # stocks with a stop-loss/target: show the levels in turn
+            self.last_alt = now
+            self.alt = not self.alt
+            if CFG.get("STOCK_ALERTS"):
+                self.draw()
 
     def draw(self):
         self.dirty = False
@@ -2947,8 +3044,16 @@ class StocksScreen(Screen):
             hx = 18 + (px_width(F_SMALL, prod) + 5 if prod else 0)
             if held_l.anchored_position[0] != hx:
                 held_l.anchored_position = (hx, held_l.anchored_position[1])
-            _set(held_l, _fit(F_SMALL, "%d @ %s" % (qty, price(avg)),
-                              self.MID - px_width(F_SMALL, chg_l.text) - 6 - hx))
+            al = (CFG.get("STOCK_ALERTS") or {}).get(_key)
+            if al and al[2]:                     # triggered: say so until it's set again
+                held, h_col = ("SL HIT " if al[2][0] == "sl" else "TGT HIT ") + _lvl(al[2][1]), \
+                    (RED if al[2][0] == "sl" else GREEN)
+            elif al and self.alt:                # armed: the levels, taking turns with qty @ avg
+                held, h_col = " ".join(x for x in (("SL" + _lvl(al[0])) if al[0] else "",
+                                                   ("T" + _lvl(al[1])) if al[1] else "") if x), 0xC9A227
+            else:
+                held, h_col = "%d @ %s" % (qty, price(avg)), 0x8A9099
+            _set(held_l, _fit(F_SMALL, held, self.MID - px_width(F_SMALL, chg_l.text) - 6 - hx), h_col)
         if rows:
             a = b = ""
         elif not self.picks:
@@ -4009,6 +4114,7 @@ def get_portfolio():
     port_day_pct = day_pct
     heat_screen.update(heat_rows)
     stocks_screen.update(stock_rows + pos_rows)
+    check_alerts(stock_rows + pos_rows)
     lbl_day_pct.text = "%+.2f%%" % day_pct
     lbl_day_pct.color = lbl_day.color
     lbl_tot.text = inr(total, signed=True)
@@ -5750,7 +5856,7 @@ def settings_reset(request: Request):
                                           'choice) and goes back to settings.toml. The board restarts.</p>'
                                           '<p><a href="/settings/reset?sure=1">Yes, reset</a> &nbsp; '
                                           '<a href="/settings">Cancel</a></p>'))
-    CFG = {k: v for k, v in CFG.items() if k == "STOCK_PICKS"}     # picks live on /stocks
+    CFG = {k: v for k, v in CFG.items() if k in ("STOCK_PICKS", "STOCK_ALERTS", "NTFY_TOPIC")}  # set on /stocks
     try:
         save_cfg()
         microcontroller.nvm[0] = 0
@@ -6075,12 +6181,22 @@ def _stock_name(key):
 STOCK_MSGS = {"on": "Turned on the My stocks screen (after Portfolio) - move it in Settings.",
               "full": "The board keeps up to %d stocks." % STOCK_MAX,
               "none": "Pick a stock first - the screen only shows stocks you picked.",
-              "err": "Couldn't save - try again."}
+              "err": "Couldn't save - try again.",
+              "set": "Alert saved.", "off": "Alert removed.", "topic": "ntfy topic saved.",
+              "test": "Test notification sent - check your phone.",
+              "sl": "Not saved: the stop-loss has to be on the losing side of the current price "
+                    "(below it for a holding, above it for a short).",
+              "tgt": "Not saved: the target has to be on the winning side of the current price "
+                     "(above it for a holding, below it for a short).",
+              "num": "Not saved: enter prices as numbers."}
 
 STOCK_CSS = (".up{color:#4cd964}.dn{color:#ff5a5a}.flat{color:#999}.del{color:#e57373}"
              ".name small{display:block;margin-top:3px;line-height:1.5}"
              ".pg{color:#8ab4f8;font-size:12px;margin:14px 0 0;text-transform:uppercase}"
              ".tools a{font-size:14px}.add{min-width:56px;text-align:center}"
+             ".al{margin:6px 0 2px;font-size:13px;color:#aaa}.al span{white-space:nowrap;display:inline-block;"
+             "margin:2px 6px 2px 0}.al input[type=number]{width:62px;padding:5px;font-size:14px}"
+             ".al input[type=text]{padding:6px}.al button{margin:0 0 0 4px;padding:6px 12px;font-size:13px}"
              ".tag{background:#4a3a10;color:#ffb020;font-size:11px;padding:1px 6px;border-radius:8px;"
              "vertical-align:2px;font-weight:normal}")
 
@@ -6092,9 +6208,18 @@ def stocks_html(msg=""):
     for r in scr.data or ():
         if r[0] not in by:
             by[r[0]] = r
+    alerts = stock_alerts()
     out = ['<div class=note>%s</div>' % msg] if msg else []
     out.append('<p><a href="/">&larr; Back</a> &nbsp; <a href="/stocks/do?op=show">Show on the board</a>'
                ' &nbsp; <a href="/settings">Settings</a></p>')
+    topic = (cfg("NTFY_TOPIC") or "").strip()
+    out.append('<h3>Alerts</h3><small>Set a stop-loss and/or a target on any stock below. When its price '
+               'gets there the board marks it and sends one notification to your phone through ntfy. '
+               'Prices are checked each time they refresh: about once a minute in market hours.</small>'
+               '<form action="/stocks/ntfy" class=al>ntfy topic <input type=text name=topic value="%s" '
+               'style="width:210px" placeholder="your-topic-name"> <button>Save</button>%s</form>%s'
+               % (esc_attr(topic), ' &nbsp;<a href="/stocks/ntfy?test=1">Send a test</a>' if topic else "",
+                  ('<small>Last notification: %s</small>' % esc(ntfy_status)) if ntfy_status else ""))
     if scr.data is None:
         out.append('<div class=note>Log in to Kite on the <a href="/">home page</a> to see your '
                    'holdings and positions. The ones you already picked are kept.</div>')
@@ -6115,6 +6240,17 @@ def stocks_html(msg=""):
             stale += 1
             info = "position closed" if ":" in key else "not in your holdings any more"
         q = urlq(key)
+        al = alerts.get(key) or [0, 0, ""]
+        hit = ""
+        if al[2]:
+            hit = ('<small class=%s>%s hit at %s &middot; %s &middot; set it again to re-arm</small>'
+                   % ("dn" if al[2][0] == "sl" else "up", "Stop-loss" if al[2][0] == "sl" else "Target",
+                      price(al[2][1]), esc(al[2][2])))
+        info += ('<form action="/stocks/alert" class=al><input type=hidden name=s value="%s">'
+                 '<span>Stop-loss <input type=number step=any min=0 name=sl value="%s"></span> '
+                 '<span>Target <input type=number step=any min=0 name=t value="%s"> <button>Set</button></span>'
+                 '</form>%s'
+                 % (esc_attr(key), _lvl(al[0]) if al[0] else "", _lvl(al[1]) if al[1] else "", hit))
         out.append('<div class=row><span class=name>%s<small>%s</small></span>'
                    '<a class=arr href="/stocks/do?op=up&s=%s">&#9650;</a>'
                    '<a class=arr href="/stocks/do?op=down&s=%s">&#9660;</a>'
@@ -6214,6 +6350,9 @@ def stocks_do(request: Request):
         picks = []
     if picks != stocks_screen.picks:
         old = stocks_screen.picks
+        for k in list(stock_alerts()):
+            if k not in picks:
+                del CFG["STOCK_ALERTS"][k]       # an alert goes with its stock
         stocks_screen.set_picks(picks)
         if picks and not old and _stocks_on():
             m = m or "on"
@@ -6224,6 +6363,72 @@ def stocks_do(request: Request):
             m = "err"
     return _page(request, '<!doctype html><meta http-equiv="refresh" content="0;url=/stocks%s">'
                  % ("?m=" + m if m else ""))
+
+
+def _stocks_back(m=""):
+    return '<!doctype html><meta http-equiv="refresh" content="0;url=/stocks%s">' % ("?m=" + m if m else "")
+
+
+@server.route("/stocks/alert")
+def stocks_alert(request: Request):
+    q = request.query_params
+
+    def g(k):
+        v = q.get(k, safe=False)
+        return unquote(v).strip() if v else ""
+    key = g("s").upper()
+    if key not in stocks_screen.picks:
+        return _page(request, _stocks_back())
+    try:
+        sl, tgt = float(g("sl") or 0), float(g("t") or 0)
+    except ValueError:
+        return _page(request, _stocks_back("num"))
+    if sl < 0 or tgt < 0:
+        return _page(request, _stocks_back("num"))
+    row = None
+    for r in stocks_screen.data or ():
+        if r[0] == key:
+            row = r
+    if row and row[5]:                  # refuse levels that would trigger straight away
+        short, ltp = row[3] < 0, row[5]
+        if sl and (sl <= ltp if short else sl >= ltp):
+            return _page(request, _stocks_back("sl"))
+        if tgt and (tgt >= ltp if short else tgt <= ltp):
+            return _page(request, _stocks_back("tgt"))
+    alerts = stock_alerts()
+    if sl or tgt:
+        alerts[key], m = [sl, tgt, ""], "set"
+    else:
+        alerts.pop(key, None)
+        m = "off"
+    stocks_screen.dirty = True
+    try:
+        save_cfg()
+    except Exception:  # noqa: BLE001
+        m = "err"
+    return _page(request, _stocks_back(m))
+
+
+@server.route("/stocks/ntfy")
+def stocks_ntfy(request: Request):
+    q = request.query_params
+    if q.get("test", safe=False):
+        try:
+            ntfy_send("Test from your desk dashboard", "Stop-loss and target alerts will arrive like this.",
+                      "white_check_mark", "default")
+        except Exception as e:  # noqa: BLE001
+            log_err("ntfy test failed: %r" % (e,))
+            free_sockets()
+            return _page(request, stocks_html("The test didn't go: %s" % esc(str(e) or repr(e))))
+        return _page(request, _stocks_back("test"))
+    topic = q.get("topic", safe=False)
+    topic = "".join(c for c in unquote(topic).strip() if c.isalpha() or c.isdigit() or c in "-_")[:64] if topic else ""
+    CFG["NTFY_TOPIC"] = topic
+    try:
+        save_cfg()
+    except Exception:  # noqa: BLE001
+        return _page(request, _stocks_back("err"))
+    return _page(request, _stocks_back("topic"))
 
 
 @server.route("/kite")
