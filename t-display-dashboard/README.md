@@ -28,7 +28,7 @@ A Wi-Fi desk dashboard for the **LilyGO T-Display-S3** (ESP32-S3, 1.9" 320×170 
 | **Internet** | Ping graph, router ping, Wi-Fi signal, board speed test, router uptime, outage log | Ping, Cloudflare speed test, router UPnP |
 | **Pet** | Sheru, an Indian indie dog whose mood follows today's P&L; feed him with BOOT | Kite + NVM |
 | **Night clock** | Large dim analog clock, date, temperature (23:00–07:00 by default) | — |
-| **Night screensavers** | Matrix rain, fire or a starfield instead of the clock (`NIGHT_SCREEN`) | — |
+| **Animations** | Nine screensavers: matrix rain, fire, starfield, aurora, fireworks, mystify, pipes, Game of Life and a bouncing clock. For night mode (`NIGHT_SCREEN`) or played on demand from `/anim` or with BOOT | — |
 
 ## Looks (themes)
 
@@ -80,7 +80,9 @@ The original grey look:
 - **Trivia:** 241 India questions in `trivia_india.txt` — history, geography, polity, science and ISRO, sports, culture, cinema, food, economy and Uttar Pradesh — shuffled so none repeats until all have been asked. Add your own as `CATEGORY|Question|Right answer|Wrong|Wrong|Wrong` lines. The bar counts down, then the right answer turns green for 8 seconds; the screen stays up for the whole question when auto-rotating. `TRIVIA_SOURCE = "world"` switches to Open Trivia DB (mostly US/UK questions) and `"mix"` alternates.
 - **Internet:** pings `PING_HOST` (1.1.1.1) every 5 s while showing (every minute otherwise) and the router, Wi-Fi signal strength, a download speed test every 30 minutes (BOOT runs one now; up to 1 MB from CacheFly, then Cloudflare or Tele2 if that fails; retried after 2 minutes if all fail; it measures the board's own speed, which is far below your line's), the router's uptime if it answers UPnP (many do; otherwise "n/a"), and the last outage.
 - **Pet:** Sheru, a desi indie dog with a red collar. His tail wags faster the better the day, his tongue comes out when we're up, and on a red day his ears go back and his tail tucks (thrilled above +1.5%, worried below −1.5%). He gets hungry after 8 hours without roti (his steel bowl appears), and sleeps curled up at night. His birthday, last meal and meal count survive restarts. Feed him with BOOT or at `/pet`.
-- **Screensavers:** set `NIGHT_SCREEN` to `matrix`, `fire`, `stars` or `cycle` (a different one each hour). They can also go in `SCREEN_ORDER`.
+- **Animations:** set `NIGHT_SCREEN` (Settings → Night mode) to `matrix`, `fire`, `stars`, `plasma`, `fireworks`, `mystify`, `pipes`, `life`, `bounce` or `cycle` (a different one every 20 minutes). To play one whenever you like, open `/anim` ("Animations" on the home page), choose how long (1 minute to 1 hour, or until you stop it) and press Play; Stop is on the same page. On the board, BOOT on the weather, portfolio, markets or clock screen starts a random animation for 5 minutes, BOOT again moves to the next one, and KEY stops it. When it ends the board goes back to the normal rotation, or to the night screen at night. They can also go in `SCREEN_ORDER`.
+
+  ![Animations](docs/extra-animations.png)
 
 ## Buttons
 
@@ -102,6 +104,7 @@ Open `http://<board-ip>:8080` on a phone or laptop on the same Wi-Fi:
 |---|---|
 | `/` | Kite login link, paste-the-redirect-URL form, links to everything below |
 | `/todo` | Add, tick off, edit, reorder and clear to-do tasks |
+| `/anim` | Play an animation now, for a set time or until stopped |
 | `/ask` | Ask Gemini a question; the answer goes on the Ask AI screen |
 | `/stocks` | Pick the holdings and open positions for the My stocks screen, reorder or remove them; shows each one's LTP, today's move and P&L |
 | `/settings` | **Settings**: turn screens on/off, reorder them, jump to one; auto-rotate and seconds per screen; night mode on/off, hours, night screen and brightness; theme and day brightness; news, trivia, cricket, weather town, pet name, ping host |
@@ -135,7 +138,7 @@ Most settings can be changed from your phone at `http://<board-ip>:8080/settings
 | `GEMINI_API_KEY` | (none) | Key for the Ask AI screen (settings.toml only) |
 | `GEMINI_MODEL` | `gemini-flash-latest` | Gemini model for Ask AI |
 | `STOCK_PICKS` | (none) | What My stocks shows, comma separated: holdings by Kite symbol, positions as `SYMBOL:PRODUCT` (`RELIANCE,M&M,NIFTY25NOV24000CE:NRML`); easier to pick at `/stocks` |
-| `NIGHT_SCREEN` | `clock` | What shows at night: `clock`, `matrix`, `fire`, `stars` or `cycle` |
+| `NIGHT_SCREEN` | `clock` | What shows at night: `clock`, `matrix`, `fire`, `stars`, `plasma`, `fireworks`, `mystify`, `pipes`, `life`, `bounce` or `cycle` |
 | `STAT_PLAYERS` | Kohli, Rohit, Bumrah, Gill | `id:Name` or `id:Name:bowl`, comma separated (the id is in the player's Cricinfo URL) |
 | `STAT_CLASS` | `11` | `11` all internationals, `1` Tests, `2` ODIs, `3` T20Is |
 | `TRIVIA_SECONDS` / `TRIVIA_SOURCE` | `30` / `india` | Time to think; `india` (the file), `world` (Open Trivia DB) or `mix` |

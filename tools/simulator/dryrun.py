@@ -106,6 +106,11 @@ def client():
     NS["GEMINI_KEY"] = "testkey"
     page = urllib.request.urlopen("http://127.0.0.1:8080/ask/go?" + _enc({"q": "how many centuries did Sachin score? 100%"}), timeout=8).read().decode()
     print("ask:", repr(NS["ask_screen"].q), "->", NS["ask_screen"].a[:50], "| on page:", "On the board now" in page)
+    # ANIMATION TEST: press Play on the page's form the way a browser does, then Stop
+    urllib.request.urlopen("http://127.0.0.1:8080/anim/play?m=15&a=mystify", timeout=8).read()
+    print("playing:", NS["play_name"], round((NS["play_until"] - time.monotonic()) / 60), "min")
+    urllib.request.urlopen("http://127.0.0.1:8080/anim/play?a=stop", timeout=8).read()
+    print("stopped:", NS["play_until"] == 0.0)
     # THEME TEST: choosing a look saves it to NVM and asks for a restart
     r = urllib.request.urlopen("http://127.0.0.1:8080/theme?name=classic", timeout=4).read().decode()
     print("theme page:", r.split("<p>")[1][:60] if "<p>" in r else r[:80], "| nvm[0] =", NS["microcontroller"].nvm[0] if "microcontroller" in NS else "?")

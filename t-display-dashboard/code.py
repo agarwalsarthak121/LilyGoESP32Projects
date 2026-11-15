@@ -22,7 +22,8 @@
 #   NEWS_SECONDS="6"      (how long each headline stays up)
 #   NEWS_PER_VISIT="10"   (headlines shown before auto-rotate moves on; "2" = short visits)
 #   THEME="aura"          (a different style per screen; "classic" = the original grey look)
-#   NIGHT_SCREEN="clock"  (or "matrix", "fire", "stars", "cycle" = a different one each hour)
+#   NIGHT_SCREEN="clock"  (or an animation: matrix, fire, stars, plasma, fireworks, mystify, pipes, life,
+#                          bounce; "cycle" = a different one every 20 minutes)
 #   STAT_PLAYERS="253802:Virat Kohli,625383:Jasprit Bumrah:bowl"  (Cricinfo id:name[:bowl])
 #   STAT_CLASS="11"       (11 all internationals, 1 Tests, 2 ODIs, 3 T20Is)
 #   TRIVIA_SECONDS="30"   TRIVIA_SOURCE="india" (or "world" = Open Trivia DB, "mix")
@@ -3099,8 +3100,28 @@ EXTRA["ask"] = ask_screen
 
 
 # ------------------------------------------------------------- night screensavers
-# NIGHT_SCREEN = "clock" (default), "matrix", "fire", "stars" or "cycle" (changes every hour).
-# They can also go in SCREEN_ORDER for the daytime rotation.
+# NIGHT_SCREEN = "clock" (default), one of SAVERS below, or "cycle" (a different one every 20 minutes).
+# They can also go in SCREEN_ORDER for the daytime rotation, and be played on demand:
+# from http://<board>:8080/anim, or with the BOOT button (see play_next).
+PLAY_SECONDS = 300
+play_name = None                # animation being played on demand
+play_until = 0.0
+
+
+def play(name, secs=PLAY_SECONDS):
+    """Show an animation now, for `secs` seconds (0 = until stopped)."""
+    global play_name, play_until
+    play_name = name
+    play_until = time.monotonic() + (secs if secs > 0 else 10 * 365 * 86400)
+
+
+def play_next(cur=None):
+    """Start the animation after `cur` (a random one if `cur` isn't an animation)."""
+    left = play_until - time.monotonic() if play_name else 0
+    i = SAVERS.index(cur) + 1 if cur in SAVERS else random.randint(0, len(SAVERS) - 1)
+    play(SAVERS[i % len(SAVERS)], max(left, PLAY_SECONDS))
+
+
 class Saver(Screen):
     def __init__(self, clock_xy, colour):
         global root
@@ -3113,6 +3134,11 @@ class Saver(Screen):
 
     def build(self):
         pass
+
+    def boot(self, now):                         # BOOT on an animation: the next one
+        for name, scr in EXTRA.items():
+            if scr is self:
+                play_next(name)
 
     def frame(self, now):
         if now - self.last >= 0.05:              # ~20 frames a second at most
@@ -3259,18 +3285,346 @@ class Stars(Saver):
             s[2], s[3], s[4], s[5] = z, sx, sy, big
 
 
+def hue(h, v=1.0):
+    """A fully saturated colour: h 0..1 around the colour wheel, v = brightness."""
+    h = (h % 1.0) * 6
+    i = int(h)
+    f = h - i
+    m, t, q = int(255 * v), int(255 * v * f), int(255 * v * (1 - f))
+    r, g, b = ((m, t, 0), (q, m, 0), (0, m, t), (0, q, m), (t, 0, m), (m, 0, q))[i % 6]
+    return (r << 16) | (g << 8) | b
+
+
+class Plasma(Saver):
+    """Slow aurora: a fixed wave pattern whose colours drift (only the palette changes)."""
+    W, H, N = 64, 34, 48
+
+    def build(self):
+        W, H, N = self.W, self.H, self.N
+        self.bmp = displayio.Bitmap(W, H, N)
+        self.pal = displayio.Palette(N)
+        self.cols = ramp((0x020818, 0x0A3A6A, 0x12B5A0, 0x7CF29C, 0x1C6FB8, 0x5A2FA0,
+                          0xC04A9A, 0x1A1040, 0x020818), N)
+        sin = math.sin
+        for y in range(H):
+            for x in range(W):
+                v = (sin(x * 0.19) + sin(y * 0.23 + 1.0) + sin((x + y) * 0.11) +
+                     sin(math.sqrt((x - 32) * (x - 32) + (y - 17) * (y - 17)) * 0.21))
+                self.bmp[x, y] = int((v + 4.0) / 8.0 * N * 2) % N
+        self.grp.append(displayio.Group(scale=5))
+        self.grp[0].append(displayio.TileGrid(self.bmp, pixel_shader=self.pal))
+        self.off = self.n = 0
+        self.paint()
+
+    def paint(self):
+        pal, cols, N, off = self.pal, self.cols, self.N, self.off
+        for i in range(N):
+            pal[i] = cols[(i + off) % N]
+
+    def step(self):
+        self.n += 1
+        if self.n % 3 == 0:
+            self.off = (self.off + 1) % self.N
+            self.paint()
+
+
+class Fireworks(Saver):
+    """Rockets climb and burst into falling sparks."""
+
+    def build(self):
+        self.bmp = displayio.Bitmap(320, 170, 8)
+        p = displayio.Palette(8)
+        for i, c in enumerate((0x000000, 0xFF4040, 0xFFB020, 0xFFF060, 0x50E070, 0x40C8FF, 0xC070FF, 0xFFFFFF)):
+            p[i] = c
+        self.grp.append(displayio.TileGrid(self.bmp, pixel_shader=p))
+        self.parts = []                 # [x, y, vx, vy, life, colour]
+        self.rockets = []               # [x, y, vy, burst height, colour]
+        self.trail = [[] for _ in range(4)]
+        self.ti = 0
+        self.wait = 5
+
+    def step(self):
+        b = self.bmp
+        self.ti = (self.ti + 1) % 4
+        lit = self.trail[self.ti]       # what was drawn 4 frames ago: put it out
+        fill = bitmaptools.fill_region
+        for x, y in lit:
+            fill(b, x, y, x + 2, y + 2, 0)
+        lit.clear()
+        if self.wait > 0:
+            self.wait -= 1
+        elif len(self.rockets) < 2 and len(self.parts) < 80:
+            self.rockets.append([float(random.randint(40, 280)), 168.0, -random.uniform(3.0, 4.2),
+                                 random.randint(25, 85), random.randint(1, 6)])
+            self.wait = random.randint(6, 28)
+        for r in self.rockets[:]:
+            r[1] += r[2]
+            if r[1] <= r[3]:
+                for _ in range(random.randint(22, 32)):
+                    a, sp = random.uniform(0, 6.283), random.uniform(0.5, 2.6)
+                    self.parts.append([r[0], r[1], math.cos(a) * sp, math.sin(a) * sp * 0.85,
+                                       random.randint(16, 32), r[4] if random.random() < 0.85 else 7])
+                self.rockets.remove(r)
+            else:
+                x, y = int(r[0]), int(r[1])
+                fill(b, x, y, x + 2, y + 2, 7)
+                lit.append((x, y))
+        keep = []
+        for p in self.parts:
+            p[0] += p[2]
+            p[1] += p[3]
+            p[3] += 0.06                # gravity
+            p[2] *= 0.97
+            p[4] -= 1
+            x, y = int(p[0]), int(p[1])
+            if p[4] > 0 and 0 <= x < 319 and 0 <= y < 169:
+                if p[4] > 6 or p[4] & 1:   # the last sparks twinkle
+                    fill(b, x, y, x + 2, y + 2, p[5])
+                    lit.append((x, y))
+                keep.append(p)
+        self.parts = keep
+
+
+class Mystify(Saver):
+    """Two bouncing four-cornered shapes leaving trails, colours drifting."""
+    TRAIL = 7
+
+    def build(self):
+        self.bmp = displayio.Bitmap(320, 170, 4)
+        self.pal = displayio.Palette(4)
+        self.pal[0] = 0
+        self.grp.append(displayio.TileGrid(self.bmp, pixel_shader=self.pal))
+        self.shapes = []
+        for c in (1, 2):
+            pts = [[float(random.randint(10, 309)), float(random.randint(10, 159)),
+                    random.choice((-1, 1)) * random.uniform(1.5, 3.8),
+                    random.choice((-1, 1)) * random.uniform(1.2, 3.2)] for _ in range(4)]
+            self.shapes.append((c, pts, []))
+        self.h = random.random()
+
+    def poly(self, pts, v):
+        b = self.bmp
+        for i in range(4):
+            x0, y0 = pts[i]
+            x1, y1 = pts[(i + 1) % 4]
+            bitmaptools.draw_line(b, x0, y0, x1, y1, v)
+
+    def step(self):
+        for c, pts, hist in self.shapes:
+            for p in pts:
+                p[0] += p[2]
+                if p[0] < 0:
+                    p[0], p[2] = -p[0], -p[2]
+                elif p[0] > 319:
+                    p[0], p[2] = 638 - p[0], -p[2]
+                p[1] += p[3]
+                if p[1] < 0:
+                    p[1], p[3] = -p[1], -p[3]
+                elif p[1] > 169:
+                    p[1], p[3] = 338 - p[1], -p[3]
+            hist.append(tuple((int(p[0]), int(p[1])) for p in pts))
+            if len(hist) > self.TRAIL:
+                self.poly(hist.pop(0), 0)
+            for old in hist[-3:]:       # redraw the newest few: erasing cuts gaps where lines cross
+                self.poly(old, c)
+        self.h += 0.002
+        self.pal[1] = hue(self.h)
+        self.pal[2] = hue(self.h + 0.45)
+
+
+class Pipes(Saver):
+    """Pipes grow across the screen, turn at random and start over when it fills up."""
+    CELL, GW, GH, TOP = 16, 20, 10, 5
+    DX, DY = (1, 0, -1, 0), (0, 1, 0, -1)
+
+    def build(self):
+        self.bmp = displayio.Bitmap(320, 170, 16)
+        p = displayio.Palette(16)
+        p[0] = 0
+        for k, (dark, light) in enumerate(((0x0E6FA8, 0x7FD4FF), (0xA83A2A, 0xFF9C8A), (0x2E8A3A, 0x9CF0A4),
+                                           (0xA8861A, 0xFFE27A), (0x7040A8, 0xD0A8FF))):
+            p[1 + 2 * k], p[2 + 2 * k] = dark, light
+        self.grp.append(displayio.TileGrid(self.bmp, pixel_shader=p))
+        self.n = 0
+        self.reset()
+
+    def reset(self):
+        self.bmp.fill(0)
+        self.used = bytearray(self.GW * self.GH)
+        self.count = self.pause = 0
+        self.new_pipe()
+
+    def centre(self, x, y):
+        return x * self.CELL + 8, self.TOP + y * self.CELL + 8
+
+    def joint(self):
+        cx, cy = self.centre(self.x, self.y)
+        bitmaptools.fill_region(self.bmp, cx - 5, cy - 5, cx + 5, cy + 5, 1 + 2 * self.c)
+        bitmaptools.fill_region(self.bmp, cx - 2, cy - 2, cx + 2, cy + 2, 2 + 2 * self.c)
+
+    def new_pipe(self):
+        for _ in range(30):
+            x, y = random.randint(0, self.GW - 1), random.randint(0, self.GH - 1)
+            if not self.used[y * self.GW + x]:
+                break
+        else:
+            self.pause = 30
+            return
+        self.x, self.y = x, y
+        self.d, self.c, self.left = random.randint(0, 3), random.randint(0, 4), random.randint(14, 60)
+        self.used[y * self.GW + x] = 1
+        self.count += 1
+        self.joint()
+
+    def step(self):
+        self.n += 1
+        if self.n % 2:
+            return
+        if self.pause:                  # full: hold the picture a moment, then start again
+            self.pause -= 1
+            if not self.pause:
+                self.reset()
+            return
+        opts = []
+        for d in range(4):
+            nx, ny = self.x + self.DX[d], self.y + self.DY[d]
+            if d != (self.d + 2) % 4 and 0 <= nx < self.GW and 0 <= ny < self.GH and \
+                    not self.used[ny * self.GW + nx]:
+                opts.append(d)
+        self.left -= 1
+        if not opts or self.left <= 0:
+            if self.count > self.GW * self.GH * 0.6:
+                self.pause = 40
+            else:
+                self.new_pipe()
+            return
+        d = self.d if (self.d in opts and random.random() < 0.65) else random.choice(opts)
+        if d != self.d:
+            self.joint()
+        x0, y0 = self.centre(self.x, self.y)
+        self.x += self.DX[d]
+        self.y += self.DY[d]
+        self.d = d
+        x1, y1 = self.centre(self.x, self.y)
+        lo_x, hi_x, lo_y, hi_y = min(x0, x1), max(x0, x1), min(y0, y1), max(y0, y1)
+        bitmaptools.fill_region(self.bmp, lo_x - 3, lo_y - 3, hi_x + 3, hi_y + 3, 1 + 2 * self.c)
+        bitmaptools.fill_region(self.bmp, lo_x - 1, lo_y - 1, hi_x + 1, hi_y + 1, 2 + 2 * self.c)
+        self.used[self.y * self.GW + self.x] = 1
+        self.count += 1
+
+
+class Life(Saver):
+    """Conway's Game of Life on a 40x21 grid; reseeds when it settles down."""
+    W, H = 40, 21
+
+    def build(self):
+        self.bmp = displayio.Bitmap(self.W, self.H, 4)
+        p = displayio.Palette(4)
+        p[0], p[1], p[2], p[3] = 0x000000, 0x23B85C, 0xC8FFD8, 0x0C3018    # empty, alive, newborn, just died
+        self.grp.append(displayio.Group(scale=8))
+        self.grp[0].append(displayio.TileGrid(self.bmp, pixel_shader=p, y=0))
+        self.n = 0
+        self.seed()
+
+    def seed(self):
+        self.g = [bytearray(1 if random.random() < 0.3 else 0 for _ in range(self.W)) for _ in range(self.H)]
+        for y in range(self.H):
+            row = self.g[y]
+            for x in range(self.W):
+                self.bmp[x, y] = 2 if row[x] else 0
+        self.gen = self.same = 0
+        self.pop = -1
+
+    def step(self):
+        self.n += 1
+        if self.n % 6:                  # a generation about every third of a second
+            return
+        g, b, W, H = self.g, self.bmp, self.W, self.H
+        new, pop = [], 0
+        for y in range(H):
+            up, mid, dn = g[y - 1], g[y], g[(y + 1) % H]
+            row = bytearray(W)
+            for x in range(W):
+                xl = x - 1
+                xr = x + 1 if x + 1 < W else 0
+                n = up[xl] + up[x] + up[xr] + mid[xl] + mid[xr] + dn[xl] + dn[x] + dn[xr]
+                if n == 3 or (n == 2 and mid[x]):
+                    row[x] = 1
+                    pop += 1
+                    v = 1 if mid[x] else 2
+                else:
+                    v = 3 if mid[x] else 0
+                if b[x, y] != v:
+                    b[x, y] = v
+            new.append(row)
+        self.g = new
+        self.gen += 1
+        self.same = self.same + 1 if pop == self.pop else 0
+        self.pop = pop
+        if self.same > 25 or self.gen > 600 or pop < 8:
+            self.seed()
+
+
+class Bounce(Saver):
+    """The time drifts around the screen and changes colour each time it hits an edge."""
+
+    def build(self):
+        self.lbl = text(F_TIME, "--:--", 40, 30, 0x40C8FF)
+        self.lbl.scale = 2                          # twice the size: readable from across the room
+        self.date = text(F_SMALL, "", 42, 80, 0x8A9099)
+        self.w = px_width(F_TIME, "00:00") * 2 + 2
+        self.h = F_TIME.get_bounding_box()[1] * 2
+        self.x, self.y = float(random.randint(10, 100)), float(random.randint(10, 60))
+        self.vx, self.vy = 1.1, 0.7
+        self.day = -1
+
+    def second(self, hhmm):
+        if self.lbl.text != hhmm:
+            self.lbl.text = hhmm
+        t = time.localtime()
+        if t.tm_mday != self.day:
+            self.day = t.tm_mday
+            self.date.text = "%s %d %s" % (("MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN")[t.tm_wday],
+                                           t.tm_mday, MONTHS[t.tm_mon - 1].upper())
+
+    def step(self):
+        hit = False
+        self.x += self.vx
+        self.y += self.vy
+        if self.x < 2 or self.x > 318 - self.w:
+            self.vx = -self.vx
+            self.x += 2 * self.vx
+            hit = True
+        if self.y < 2 or self.y > 168 - self.h - 14:
+            self.vy = -self.vy
+            self.y += 2 * self.vy
+            hit = True
+        if hit:
+            self.lbl.color = hue(random.random())
+        x, y = int(self.x), int(self.y)
+        self.lbl.anchored_position = (x, y)
+        self.date.anchored_position = (x + 2, y + self.h + 3)
+
+
 EXTRA["matrix"] = MatrixRain((314, 150), 0x1A6A30)
 EXTRA["fire"] = Fire((314, 4), 0x5A3A2A)
 EXTRA["stars"] = Stars((314, 150), 0x4A5068)
-SAVERS = ("matrix", "fire", "stars")
+EXTRA["plasma"] = Plasma((314, 150), 0xC8D8E8)
+EXTRA["fireworks"] = Fireworks((314, 150), 0x4A5068)
+EXTRA["mystify"] = Mystify((314, 150), 0x4A5068)
+EXTRA["pipes"] = Pipes((314, 150), 0x8A9099)
+EXTRA["life"] = Life((314, 150), 0x1A6A30)
+EXTRA["bounce"] = Bounce((314, 150), 0x000000)
+EXTRA["bounce"].clock.hidden = True          # the bouncing time is the clock
+SAVERS = ("matrix", "fire", "stars", "plasma", "fireworks", "mystify", "pipes", "life", "bounce")
 NIGHT_SCREEN = (cfg("NIGHT_SCREEN") or "clock").strip().lower()
 EXTRA_LIST = list(EXTRA.values())
 
 
 def night_name(t):
     """Which screen shows at night."""
-    if NIGHT_SCREEN == "cycle":
-        return (SAVERS + ("clock",))[t.tm_hour % 4]
+    if NIGHT_SCREEN == "cycle":                 # a different one every 20 minutes
+        return (SAVERS + ("clock",))[(t.tm_hour * 3 + t.tm_min // 20) % (len(SAVERS) + 1)]
     return NIGHT_SCREEN if NIGHT_SCREEN in EXTRA else "clock"
 
 
@@ -5004,7 +5358,7 @@ def home(request: Request):
                 '<p><button style="padding:10px 18px">Send to board</button></p></form>')
         body = PAGE % ("Status: " + kite_status, link + form)
     body = body.replace("</body>", '<p style="margin-top:32px"><a href="/todo">To-do list</a> '
-                        '<a href="/stocks">My stocks</a> <a href="/ask">Ask AI</a> <a href="/settings">Settings</a></p>'
+                        '<a href="/stocks">My stocks</a> <a href="/ask">Ask AI</a> <a href="/anim">Animations</a> <a href="/settings">Settings</a></p>'
                         '<p style="margin-top:16px"><a href="/cricket" '
                         'style="background:#444">Cricket matches</a></p>'
                         '<p style="margin-top:16px"><a href="/rotate?on=%d" style="background:#444">'
@@ -5116,7 +5470,9 @@ def stat_debug(request: Request):
 SCREEN_LABELS = {"weather": "Weather", "portfolio": "Portfolio", "heatmap": "Holdings heatmap",
                  "markets": "Markets", "cricket": "Cricket", "stat": "Stat of the day",
                  "news": "News", "trivia": "Trivia", "net": "Internet", "pet": "Pet", "todo": "To-do", "stocks": "My stocks", "ask": "Ask AI",
-                 "clock": "Big clock", "matrix": "Matrix rain", "fire": "Fire", "stars": "Starfield"}
+                 "clock": "Big clock", "matrix": "Matrix rain", "fire": "Fire", "stars": "Starfield",
+                 "plasma": "Aurora", "fireworks": "Fireworks", "mystify": "Mystify", "pipes": "Pipes",
+                 "life": "Game of Life", "bounce": "Bouncing clock"}
 RESTART_KEYS = ("WEATHER_TOWN", "WEATHER_LAT", "WEATHER_LON", "TRIVIA_SOURCE", "PET_NAME", "NEWS_COUNT")
 force_show = None            # the loop switches to this screen on its next pass
 
@@ -5217,8 +5573,8 @@ def settings_html(msg=""):
                '<label>Night brightness <input type=number step=0.01 min=0.01 max=1 name=NIGHT_BRIGHTNESS value=%s></label>'
                '<small>KEY still wakes the other screens for a minute at night.</small>'
                % (" checked" if NIGHT else "", _opt(hours, nf), _opt(hours, nt),
-                  _opt((("clock", "Analog clock"), ("matrix", "Matrix rain"), ("fire", "Fire"),
-                        ("stars", "Starfield"), ("cycle", "A different one each hour")), NIGHT_SCREEN),
+                  _opt((("clock", "Analog clock"),) + tuple((n, SCREEN_LABELS[n]) for n in SAVERS) +
+                       (("cycle", "A different one every 20 minutes"),), NIGHT_SCREEN),
                   NIGHT_BRIGHT))
     out.append('<h3>Look</h3>'
                '<label>Theme <select name=THEME>%s</select> <small>(restarts the board)</small></label>'
@@ -5324,7 +5680,7 @@ def settings_save(request: Request):
     CFG["SCREEN_SECONDS"] = str(_num(g("SCREEN_SECONDS"), 3, 3600, SCREEN_SECONDS))
     CFG["NIGHT_HOURS"] = ("%d-%d" % (_num(g("NIGHT_FROM"), 0, 23, 23), _num(g("NIGHT_TO"), 0, 23, 7))
                           if g("NIGHT_ON") else "")
-    if g("NIGHT_SCREEN") in ("clock", "matrix", "fire", "stars", "cycle"):
+    if g("NIGHT_SCREEN") in ("clock", "cycle") + SAVERS:
         CFG["NIGHT_SCREEN"] = g("NIGHT_SCREEN")
     CFG["NIGHT_BRIGHTNESS"] = "%.2f" % _num(g("NIGHT_BRIGHTNESS"), 0.01, 1, NIGHT_BRIGHT, True)
     CFG["DAY_BRIGHTNESS"] = "%.2f" % _num(g("DAY_BRIGHTNESS"), 0.02, 1, DAY_BRIGHT, True)
@@ -5547,6 +5903,52 @@ def todo_do(request: Request):
     except Exception as e:  # noqa: BLE001
         return _page(request, todo_html("Couldn't save: %s" % esc(str(e))))
     return _page(request, '<!doctype html><meta http-equiv="refresh" content="0;url=/todo">')
+
+
+# ------------------------------------------------------------- Animations page
+def anim_html(msg=""):
+    left = play_until - time.monotonic()
+    out = ['<div class=note>%s</div>' % msg] if msg else []
+    out.append('<p><a href="/">&larr; Back</a> &nbsp; <a href="/settings">Settings</a></p>')
+    if play_name and left > 0:
+        out.append('<div class=note>Playing <b>%s</b>%s &nbsp; <a href="/anim/play?a=stop">Stop</a></div>'
+                   % (esc(SCREEN_LABELS.get(play_name, play_name)),
+                      " until you stop it" if left > 86400 else " for %d more min" % (left // 60 + 1)))
+    out.append('<form action="/anim/play"><label>Play for <select name=m>%s</select></label>'
+               % _opt((("1", "1 minute"), ("5", "5 minutes"), ("15", "15 minutes"), ("60", "1 hour"),
+                       ("0", "Until I stop it")), "5"))
+    for name in SAVERS:
+        out.append('<div class=row><span class=name><b>%s</b>%s</span>'
+                   '<button name=a value=%s style="margin:0;padding:8px 16px">Play</button></div>'
+                   % (esc(SCREEN_LABELS.get(name, name)),
+                      " <small>(playing)</small>" if name == play_name and left > 0 else "", name))
+    out.append('</form><p><small>On the board: BOOT on the weather, portfolio, markets or clock screen starts '
+               'an animation; BOOT again shows the next one; KEY stops it. Choose the night-time one in '
+               '<a href="/settings">Settings</a>.</small></p>')
+    page = SET_PAGE.replace("Dashboard settings</title>", "Animations</title>").replace(
+        "<h2>Dashboard settings</h2>", "<h2>Animations</h2>")
+    return page % "".join(out)
+
+
+@server.route("/anim")
+def anim_page(request: Request):
+    return _page(request, anim_html())
+
+
+@server.route("/anim/play")
+def anim_play(request: Request):
+    global play_until
+    q = request.query_params
+    a = q.get("a", safe=False) or ""
+    if a == "stop":
+        play_until = 0.0                    # the main loop puts the normal screen back
+    elif a in SAVERS:
+        try:
+            mins = int(q.get("m", safe=False) or "5")
+        except ValueError:
+            mins = 5
+        play(a, max(0, min(mins, 600)) * 60)
+    return _page(request, '<!doctype html><meta http-equiv="refresh" content="0;url=/anim">')
 
 
 # ------------------------------------------------------------- Ask AI page
@@ -6183,6 +6585,8 @@ while True:
         boot_was = not boot_down
         if boot_press and showing in EXTRA:             # BOOT: the screen's own action
             EXTRA[showing].boot(now_m)
+        elif boot_press and showing in ("weather", "portfolio", "markets", "clock"):
+            play_next()                                 # BOOT: play an animation
         elif boot_press and showing == "cricket":       # BOOT: next followed match
             last_cmatch = now_m
             cric_next()
@@ -6205,7 +6609,22 @@ while True:
             dwell = EXTRA[showing].dwell if showing in EXTRA else (
                 cric_dwell() if showing == "cricket" else None)
             auto = auto_rotate and now_m - last_switch > (dwell or SCREEN_SECONDS)
-        if night_now and not switch:
+        if play_name:                        # an animation played on demand (/anim or BOOT)
+            if switch or now_m > play_until:     # KEY, Stop or time up: back to normal
+                play_name = None
+                if not switch:
+                    if night_now:
+                        wake_until = 0.0
+                    else:
+                        display.root_group = ALL_SCREENS[ORDER[screen]]
+                        showing = ORDER[screen]
+                        last_switch = now_m
+            else:
+                auto = False
+                if showing != play_name:
+                    display.root_group = ALL_SCREENS[play_name]
+                    showing = play_name
+        if night_now and not switch and not play_name:
             auto = False
             if now_m > wake_until:            # not woken by the button: the night screen
                 nname = night_name(t)

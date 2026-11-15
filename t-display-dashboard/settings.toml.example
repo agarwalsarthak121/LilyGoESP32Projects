@@ -47,7 +47,7 @@ FMP_API_KEY = ""
 # GEMINI_API_KEY = ""         # for the Ask AI screen: a key from Google AI Studio (aistudio.google.com)
 # GEMINI_MODEL = "gemini-flash-latest"
 # SCREEN_ORDER = "weather,ask,todo,portfolio,stocks,heatmap,markets,cricket,stat,news,trivia,net,pet"
-#                             # also available: clock, matrix, fire, stars
+#                             # also available: clock, matrix, fire, stars, plasma, fireworks, mystify, pipes, life, bounce
 # SCREEN_SECONDS = "15"
 # AUTO_ROTATE = "off"         # screens then change only with the KEY button
 
@@ -55,7 +55,8 @@ FMP_API_KEY = ""
 # WATCHDOG = "off"            # disable the 2-minute hang watchdog (e.g. while using the REPL)
 
 # --- Extra screens ---
-# NIGHT_SCREEN = "clock"      # or "matrix", "fire", "stars", "cycle" (a different one each hour)
+# NIGHT_SCREEN = "clock"      # or matrix, fire, stars, plasma, fireworks, mystify, pipes, life, bounce,
+#                             # or "cycle" (a different one every 20 minutes). Play any time at /anim
 # STAT_PLAYERS = "253802:Virat Kohli,34102:Rohit Sharma,625383:Jasprit Bumrah:bowl,1070173:Shubman Gill"
 # STAT_CLASS = "11"           # 11 all internationals, 1 Tests, 2 ODIs, 3 T20Is
 # TRIVIA_SECONDS = "30"
