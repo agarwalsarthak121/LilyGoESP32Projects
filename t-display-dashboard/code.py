@@ -2934,8 +2934,8 @@ class StocksScreen(Screen):
                 root.append(sep)
             self.rows.append(shapes + [
                 text(self.F1, "", 22, y - 3, WHITE),                    # symbol
-                text(self.F1, "", 316, y - 3, WHITE, right=True),       # LTP
-                text(self.F2, "", 316, y + 22, WHITE, right=True),      # P&L
+                text(self.F1, "", 316, y - 3, WHITE, right=True),       # P&L
+                text(self.F2, "", 316, y + 22, WHITE, right=True),      # LTP
                 text(self.F2, "", 22, y + 22, 0xC9A227),                # stop-loss / target
                 text(self.F2, "", 240, y + 22, WHITE, right=True),      # today's change
                 text(F_SMALL, "", 0, 0, WHITE),                         # (not used)
@@ -3026,9 +3026,9 @@ class StocksScreen(Screen):
             dn.hidden = not chg < 0
             flat.hidden = chg != 0
             sep.hidden = False
-            # line 1: symbol ........ LTP        line 2: stop-loss / target .... today's change   P&L
+            # line 1: symbol ........ P&L        line 2: stop-loss / target .... today's change   LTP
             F1, F2 = self.F1, self.F2
-            _set(ltp_l, price(ltp))
+            _set(ltp_l, inr(pnl, signed=True), p_col)       # (the big label on line 1)
             room = 316 - px_width(F1, ltp_l.text) - 34
             name = _screen_text(sym)
             if px_width(F1, name) > room:
@@ -3047,7 +3047,7 @@ class StocksScreen(Screen):
                                                     ("T " + _lvl(al[1])) if al[1] else "") if x), 0xC9A227
             else:
                 held, h_col = "", 0x8A9099
-            pnl_t = inr(pnl, signed=True)
+            pnl_t = price(ltp)                              # (the right-hand label on line 2)
             pct_t = "%+.2f%%" % (chg / close * 100 if close else 0.0)
             day_t = price(chg, True) + " " + pct_t
             day_x = 316 - px_width(F2, pnl_t) - 14
@@ -3056,7 +3056,7 @@ class StocksScreen(Screen):
                 day_t = pct_t
             if hx + px_width(F2, held) + 10 + px_width(F2, day_t) > day_x:
                 held = held.replace("SL ", "SL").replace("T ", "T").replace("  ", " ")
-            _set(pnl_l, pnl_t, p_col)
+            _set(pnl_l, pnl_t, WHITE)
             if chg_l.anchored_position[0] != day_x:
                 chg_l.anchored_position = (day_x, chg_l.anchored_position[1])
             _set(chg_l, day_t, c_col)
