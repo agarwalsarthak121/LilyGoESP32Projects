@@ -2934,10 +2934,10 @@ class StocksScreen(Screen):
                 root.append(sep)
             self.rows.append(shapes + [
                 text(self.F1, "", 22, y - 3, WHITE),                    # symbol
-                text(self.F1, "", 316, y - 3, WHITE, right=True),       # price
-                text(self.F2, "", 316, y + 22, WHITE, right=True),      # P&L (rupees and %)
-                text(self.F2, "", 22, y + 22, 0x8A9099),                # qty @ avg, or the alert levels
-                text(self.F2, "", 200, y + 22, WHITE, right=True),      # today's move
+                text(self.F1, "", 316, y - 3, WHITE, right=True),       # P&L
+                text(F_SMALL, "", 0, 0, WHITE),                         # (not used)
+                text(self.F2, "", 22, y + 22, 0xC9A227),                # stop-loss / target
+                text(self.F2, "", 316, y + 22, WHITE, right=True),      # today's change
                 text(F_SMALL, "", 0, 0, WHITE),                         # (not used)
                 text(self.F2, "", 22, y + 22, 0xFFB020),                # MIS / NRML / CNC
                 sep])
@@ -2947,8 +2947,6 @@ class StocksScreen(Screen):
         # (key, symbol, product, qty, avg, ltp, close, P&L, P&L %, today's P&L); product is "" for holdings
         self.data = None
         self.picks = stock_picks()
-        self.alt = True
-        self.last_alt = 0.0
         self.shown = []
         self.page = 0
         self.last_page = 0.0
@@ -3000,11 +2998,7 @@ class StocksScreen(Screen):
             self.last_page = now
             self.page = (self.page + 1) % self.pages()
             self.draw()
-        if now - self.last_alt > 3:              # stocks with a stop-loss/target: show the levels in turn
-            self.last_alt = now
-            self.alt = not self.alt
-            if CFG.get("STOCK_ALERTS"):
-                self.draw()
+
 
     def draw(self):
         self.dirty = False
@@ -3032,37 +3026,32 @@ class StocksScreen(Screen):
             dn.hidden = not chg < 0
             flat.hidden = chg != 0
             sep.hidden = False
-            # line 1: symbol ........ price          line 2: qty/levels   today %   P&L
-            _set(ltp_l, price(ltp))
-            room = 316 - px_width(self.F1, ltp_l.text) - 34
+            # line 1: symbol ........ P&L          line 2: stop-loss / target ........ today's change
+            F1, F2 = self.F1, self.F2
+            _set(ltp_l, inr(pnl, signed=True), p_col)
+            room = 316 - px_width(F1, ltp_l.text) - 34
             name = _screen_text(sym)
-            if px_width(self.F1, name) > room:
+            if px_width(F1, name) > room:
                 name = fo_short(name)            # options/futures: drop the expiry before cutting
-            _set(sym_l, _fit(self.F1, name, room))
+            _set(sym_l, _fit(F1, name, room))
+            _set(chg_l, "%s  %+.2f%%" % (price(chg, True), chg / close * 100 if close else 0.0), c_col)
             _set(tag_l, prod)                    # positions: the product, in amber
-            hx = 22 + (px_width(self.F2, prod) + 6 if prod else 0)
+            hx = 22 + (px_width(F2, prod) + 6 if prod else 0)
             if held_l.anchored_position[0] != hx:
                 held_l.anchored_position = (hx, held_l.anchored_position[1])
             al = (CFG.get("STOCK_ALERTS") or {}).get(_key)
             if al and al[2]:                     # triggered: say so until it's set again
                 held, h_col = ("SL HIT " if al[2][0] == "sl" else "TGT HIT ") + _lvl(al[2][1]), \
                     (RED if al[2][0] == "sl" else GREEN)
-            elif al and self.alt:                # armed: the levels, taking turns with qty @ avg
-                held, h_col = " ".join(x for x in (("SL" + _lvl(al[0])) if al[0] else "",
-                                                   ("T" + _lvl(al[1])) if al[1] else "") if x), 0xC9A227
+            elif al:                             # armed: the levels
+                held, h_col = "  ".join(x for x in (("SL " + _lvl(al[0])) if al[0] else "",
+                                                    ("T " + _lvl(al[1])) if al[1] else "") if x), 0xC9A227
             else:
-                held, h_col = "%d @ %s" % (qty, group_in(int(avg + 0.5)) if avg >= 1000 else price(avg)), 0x8A9099
-            day_t = "%+.2f%%" % (chg / close * 100 if close else 0.0)
-            pnl_t = inr(pnl, signed=True) + " %+.1f%%" % pnl_pct
-            F2 = self.F2
-            if hx + px_width(F2, held) + 12 + px_width(F2, day_t) + 12 + px_width(F2, pnl_t) > 316:
-                pnl_t = inr(pnl, signed=True)        # no room: the rupee figure alone
-            _set(pnl_l, pnl_t, p_col)
-            day_x = 316 - px_width(F2, pnl_t) - 12
-            if chg_l.anchored_position[0] != day_x:
-                chg_l.anchored_position = (day_x, chg_l.anchored_position[1])
-            _set(chg_l, day_t, c_col)
-            _set(held_l, _fit(F2, held, day_x - px_width(F2, day_t) - 10 - hx), h_col)
+                held, h_col = "", 0x8A9099
+            room = 316 - px_width(F2, chg_l.text) - 10 - hx
+            if px_width(F2, held) > room:
+                held = held.replace("SL ", "SL").replace("T ", "T").replace("  ", " ")
+            _set(held_l, _fit(F2, held, room), h_col)
         if rows:
             a = b = ""
         elif not self.picks:
