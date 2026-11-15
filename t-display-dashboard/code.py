@@ -2725,7 +2725,7 @@ EXTRA["todo"] = todo_screen
 # today's move and your P&L, five to a page (more go on page 2, 3...).  The picks
 # are saved as STOCK_PICKS, which can also be set in settings.toml: holdings by
 # symbol, positions as SYMBOL:PRODUCT ("RELIANCE,M&M,NIFTY25NOV24000CE:NRML").
-STOCK_ROWS = 5
+STOCK_ROWS = 3                  # big type: three to a page
 STOCK_PAGE_SECONDS = 6
 STOCK_MAX = 30
 
@@ -2903,7 +2903,8 @@ def check_alerts(rows):
 
 
 class StocksScreen(Screen):
-    MID = 206                       # right edge of the price column
+    ROW_H = 47                      # three big rows a page
+    F1, F2 = F_NEWS2, F_MED         # first and second line of a row
 
     def __init__(self):
         global root
@@ -2913,32 +2914,32 @@ class StocksScreen(Screen):
         self.pg = text(F_SMALL, "", 262, 8, 0x8A9099, right=True)
         self.rows = []
         for i in range(STOCK_ROWS):
-            y = 29 + i * 27
+            y = 30 + i * self.ROW_H
             shapes = []
-            for colour, pts, dy in ((GREEN, [(0, 8), (5, 0), (10, 8)], 3),     # up
-                                    (RED, [(0, 0), (10, 0), (5, 8)], 3)):     # down
+            for colour, pts, dy in ((GREEN, [(0, 11), (7, 0), (14, 11)], 5),   # up
+                                    (RED, [(0, 0), (14, 0), (7, 11)], 5)):    # down
                 p = displayio.Palette(1)
                 p[0] = colour
                 shapes.append(vectorio.Polygon(pixel_shader=p, x=3, y=y + dy, points=pts))
             fp = displayio.Palette(1)
             fp[0] = 0x6A727B
-            shapes.append(vectorio.Rectangle(pixel_shader=fp, x=3, y=y + 6, width=10, height=3))
+            shapes.append(vectorio.Rectangle(pixel_shader=fp, x=3, y=y + 9, width=14, height=3))
             for s in shapes:
                 s.hidden = True
                 root.append(s)
-            sep = vectorio.Rectangle(pixel_shader=pal, width=296, height=1, x=18, y=y - 2,
+            sep = vectorio.Rectangle(pixel_shader=pal, width=310, height=1, x=4, y=y - 4,
                                      color_index=10)
             sep.hidden = True
             if i:
                 root.append(sep)
             self.rows.append(shapes + [
-                text(F_MED, "", 18, y - 5, WHITE),                      # symbol
-                text(F_MED, "", self.MID, y - 5, WHITE, right=True),    # price
-                text(F_MED, "", 314, y - 5, WHITE, right=True),         # P&L
-                text(F_SMALL, "", 18, y + 13, 0x8A9099),                # qty @ avg
-                text(F_SMALL, "", self.MID, y + 13, WHITE, right=True),  # today
-                text(F_SMALL, "", 314, y + 13, WHITE, right=True),      # P&L %
-                text(F_SMALL, "", 18, y + 13, 0xFFB020),                # MIS / NRML / CNC
+                text(self.F1, "", 22, y - 3, WHITE),                    # symbol
+                text(self.F1, "", 316, y - 3, WHITE, right=True),       # price
+                text(self.F2, "", 316, y + 22, WHITE, right=True),      # P&L (rupees and %)
+                text(self.F2, "", 22, y + 22, 0x8A9099),                # qty @ avg, or the alert levels
+                text(self.F2, "", 200, y + 22, WHITE, right=True),      # today's move
+                text(F_SMALL, "", 0, 0, WHITE),                         # (not used)
+                text(self.F2, "", 22, y + 22, 0xFFB020),                # MIS / NRML / CNC
                 sep])
         self.empty = [text(F_MED, "", 160, 80, 0xB8C0C8, center=True),
                       text(F_SMALL, "", 160, 104, 0x8A9099, center=True)]
@@ -3031,17 +3032,15 @@ class StocksScreen(Screen):
             dn.hidden = not chg < 0
             flat.hidden = chg != 0
             sep.hidden = False
+            # line 1: symbol ........ price          line 2: qty/levels   today %   P&L
             _set(ltp_l, price(ltp))
-            _set(chg_l, "%s %+.2f%%" % (price(chg, True), chg / close * 100 if close else 0.0), c_col)
-            _set(pnl_l, inr(pnl, signed=True), p_col)
-            _set(pct_l, "%+.1f%%" % pnl_pct, p_col)
-            room = self.MID - px_width(F_MED, ltp_l.text) - 26
+            room = 316 - px_width(self.F1, ltp_l.text) - 34
             name = _screen_text(sym)
-            if px_width(F_MED, name) > room:
+            if px_width(self.F1, name) > room:
                 name = fo_short(name)            # options/futures: drop the expiry before cutting
-            _set(sym_l, _fit(F_MED, name, room))
+            _set(sym_l, _fit(self.F1, name, room))
             _set(tag_l, prod)                    # positions: the product, in amber
-            hx = 18 + (px_width(F_SMALL, prod) + 5 if prod else 0)
+            hx = 22 + (px_width(self.F2, prod) + 6 if prod else 0)
             if held_l.anchored_position[0] != hx:
                 held_l.anchored_position = (hx, held_l.anchored_position[1])
             al = (CFG.get("STOCK_ALERTS") or {}).get(_key)
@@ -3052,8 +3051,18 @@ class StocksScreen(Screen):
                 held, h_col = " ".join(x for x in (("SL" + _lvl(al[0])) if al[0] else "",
                                                    ("T" + _lvl(al[1])) if al[1] else "") if x), 0xC9A227
             else:
-                held, h_col = "%d @ %s" % (qty, price(avg)), 0x8A9099
-            _set(held_l, _fit(F_SMALL, held, self.MID - px_width(F_SMALL, chg_l.text) - 6 - hx), h_col)
+                held, h_col = "%d @ %s" % (qty, group_in(int(avg + 0.5)) if avg >= 1000 else price(avg)), 0x8A9099
+            day_t = "%+.2f%%" % (chg / close * 100 if close else 0.0)
+            pnl_t = inr(pnl, signed=True) + " %+.1f%%" % pnl_pct
+            F2 = self.F2
+            if hx + px_width(F2, held) + 12 + px_width(F2, day_t) + 12 + px_width(F2, pnl_t) > 316:
+                pnl_t = inr(pnl, signed=True)        # no room: the rupee figure alone
+            _set(pnl_l, pnl_t, p_col)
+            day_x = 316 - px_width(F2, pnl_t) - 12
+            if chg_l.anchored_position[0] != day_x:
+                chg_l.anchored_position = (day_x, chg_l.anchored_position[1])
+            _set(chg_l, day_t, c_col)
+            _set(held_l, _fit(F2, held, day_x - px_width(F2, day_t) - 10 - hx), h_col)
         if rows:
             a = b = ""
         elif not self.picks:
