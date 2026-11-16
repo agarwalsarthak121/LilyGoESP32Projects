@@ -5794,6 +5794,8 @@ def settings_html(msg=""):
                '<small>(something fixed next to the sensor; a person always wobbles. 0 = off)</small></label>'
                '<label>Sensor absence delay <input type=text name=PRES_DELAY value="%s" style="width:60px"> s '
                '<small>(how long it waits before saying nobody; blank = unchanged)</small></label>'
+               '<label>Daily desk summary to ntfy at <input type=text name=SUMMARY_AT value="%s" style="width:70px"> '
+               '<small>(24-hour time, e.g. 23:00; blank = off. <a href="/presence/summary">See today\'s</a>)</small></label>'
                '<label>At the desk when Range is <input type=text name=PRES_NEAR value="%s" style="width:60px"> or less, '
                'away when it is <input type=text name=PRES_FAR value="%s" style="width:60px"> or more '
                '<small>(in between keeps the last state; blank either to turn this off)</small></label>'
@@ -5805,6 +5807,7 @@ def settings_html(msg=""):
                % (ck("PRESENCE"), esc(str(cfg("AWAY_MINUTES") or "5")), esc(str(cfg("BREAK_MINUTES") or "60")),
                   ck("PRES_GREET"), ck("BUZZ_BREAK"), ck("BUZZ_AWAY"),
                   esc(str(cfg("PRES_MAX_M") or "")), esc(str(cfg("PRES_MIN_M") or "")), pres_still_secs(), esc(str(cfg("PRES_DELAY") or "")),
+                  "" if str(cfg("SUMMARY_AT")) == "off" else esc(str(cfg("SUMMARY_AT") or "23:00")),
                   "" if str(cfg("PRES_NEAR")) == "off" else esc(str(cfg("PRES_NEAR") or "100")),
                   "" if str(cfg("PRES_FAR")) == "off" else esc(str(cfg("PRES_FAR") or "200")),
                   esc(str(cfg("PRES_PIN") or "16")), esc(str(cfg("PRES_UART") or "44")),
@@ -5920,6 +5923,14 @@ def settings_save(request: Request):
     for k in ("PRES_NEAR", "PRES_FAR"):
         v = g(k) or ""
         CFG[k] = v if v.isdigit() else "off"
+    sa = (g("SUMMARY_AT") or "").replace(".", ":")
+    if sa and ":" not in sa and sa.isdigit():
+        sa += ":00"
+    try:
+        h_, m_ = (int(x) for x in sa.split(":"))
+        CFG["SUMMARY_AT"] = "%d:%02d" % (h_, m_) if 0 <= h_ < 24 and 0 <= m_ < 60 else "off"
+    except ValueError:
+        CFG["SUMMARY_AT"] = "off"
     for k, d in (("PRES_PIN", "16"), ("PRES_UART", "44"), ("PRES_TX", "21")):
         v = (g(k) or d).lower()
         if (v.isdigit() and int(v) < 49) or v == "off":
@@ -6183,6 +6194,7 @@ pre{background:#1a1a1a;padding:10px;border-radius:8px;font-size:13px;white-space
 <a href="/presence/hello">Test the white wire</a><br>
 <small>Your chair should sit between the two. Something right next to the sensor (a charger, cables)
 that keeps it saying "someone there": ignore the first 0.7 m and put the sensor 1 m or more from your seat.</small></p>
+<p><a href="/presence/summary">Today's desk summary</a> (sent to your phone at night)</p>
 <p><a href="/presence/scan">Find the sensor wires (pin scan)</a></p>
 <p><a href="/settings#presence">Presence settings</a> &nbsp; <a href="/">Back</a></p>
 <script>
@@ -6299,6 +6311,24 @@ def presence_hello(request: Request):
     pres_cfg_msg = radar_hello()
     return Response(request, '<!doctype html><meta http-equiv="refresh" content="0;url=/presence">',
                     content_type="text/html")
+
+
+@server.route("/presence/summary")
+def presence_summary(request: Request):
+    global pres_cfg_msg
+    if request.query_params.get("send", safe=False) == "1":
+        st = summary_send()
+        body = "<p>%s</p>" % esc(st)
+    else:
+        body = ""
+    title, msg = summary_text()
+    when = summary_at()
+    return Response(request, PAGE.replace("Zerodha login", "Desk summary") % (
+        "Sent by ntfy every day at %s." % ("%d:%02d" % when if when else "never (switched off in Settings)"),
+        "%s<h3>%s</h3><pre style='white-space:pre-wrap'>%s</pre>"
+        "<p><a href='/presence/summary?send=1'>Send it to my phone now</a> &nbsp; "
+        "<a href='/presence' style='background:#444'>Back</a></p>" % (body, esc(title), esc(msg))),
+        content_type="text/html")
 
 
 @server.route("/presence.json")
@@ -7358,6 +7388,115 @@ def pres_wake(now):
         set_brightness(want_bright)
 
 
+# ---- daily desk summary (sent through ntfy at SUMMARY_AT, default 23:00)
+# The day's numbers live in CFG["DESK_LOG"] (saved every 10 minutes) so a restart keeps them:
+# [year, yday, desk seconds, first arrival (minute of day), last at desk, sittings, longest sitting
+#  seconds, break reminders, summary sent (0/1)]
+day_log = None
+day_saved_at = time.monotonic()
+summary_retry_at = 0.0
+
+
+def _day_now():
+    t = time.localtime()
+    return t, t.tm_year >= 2024          # before the clock is set we can't tell days apart
+
+
+def day_load():
+    global day_log, desk_secs, desk_day
+    t, ok = _day_now()
+    if not ok:
+        return
+    old = CFG.get("DESK_LOG")
+    if isinstance(old, list) and len(old) == 9 and old[0] == t.tm_year and old[1] == t.tm_yday:
+        day_log = old
+        desk_secs, desk_day = float(old[2]), t.tm_yday
+    else:
+        day_log = [t.tm_year, t.tm_yday, 0, -1, -1, 0, 0, 0, 0]
+        desk_secs, desk_day = 0.0, t.tm_yday
+
+
+def day_save(force=False):
+    global day_saved_at
+    if day_log is None:
+        return
+    day_log[2] = int(desk_secs)
+    if force or time.monotonic() - day_saved_at > 600:
+        day_saved_at = time.monotonic()
+        CFG["DESK_LOG"] = list(day_log)
+        try:
+            save_cfg()
+        except Exception as e:  # noqa: BLE001
+            log_err("desk log save: %r" % (e,))
+
+
+def summary_at():
+    """(hour, minute) of the daily summary, or None when it's off."""
+    v = str(cfg("SUMMARY_AT") or "23:00").strip()
+    try:
+        h, m = (int(x) for x in v.split(":"))
+        return (h, m) if 0 <= h < 24 and 0 <= m < 60 else None
+    except ValueError:
+        return None
+
+
+def _hm(minute):
+    return "%d:%02d" % (minute // 60, minute % 60)
+
+
+def summary_text(now_min=None):
+    """Title and message for the day so far."""
+    t = time.localtime()
+    if now_min is None:
+        now_min = t.tm_hour * 60 + t.tm_min
+    lg = day_log or [0, 0, 0, -1, -1, 0, 0, 0, 0]
+    desk = desk_secs
+    longest = lg[6]
+    if pres_session is not None:                      # the sitting still going on counts too
+        longest = max(longest, pres_last_here - pres_session)
+    if lg[3] < 0:
+        return ("Desk day: no desk time", "The sensor didn't see you at the desk today.")
+    span = max(0, now_min - lg[3]) * 60
+    away = max(0, span - desk)
+    lines = ["At the desk: %s" % dur_text(desk) if desk >= 60 else "At the desk: under a minute",
+             "Away: %s (between %s and %s)" % (dur_text(away) if away >= 60 else "0 min", _hm(lg[3]), _hm(now_min)),
+             "Sittings: %d, longest %s" % (lg[5], dur_text(longest) if longest >= 60 else "under a minute"),
+             "First at the desk %s, last %s" % (_hm(lg[3]), _hm(lg[4] if lg[4] >= 0 else lg[3]))]
+    if lg[7]:
+        lines.append("Break reminders: %d" % lg[7])
+    return ("Desk day: %s at the desk" % dur_text(desk), "\n".join(lines))
+
+
+def summary_send():
+    """Send today's summary now. Returns a short status."""
+    title, msg = summary_text()
+    try:
+        ntfy_send(title, msg, tags="computer", priority="default")
+    except Exception as e:  # noqa: BLE001
+        log_err("desk summary: %r" % (e,))
+        return "couldn't send: %r" % (e,)
+    return "sent: " + title
+
+
+def summary_tick(now):
+    """Called every pass: send the daily summary once, at SUMMARY_AT (retry every 5 min if it fails)."""
+    global summary_retry_at
+    when = summary_at()
+    if not when or day_log is None or day_log[8] or now < summary_retry_at or \
+            not (pres_seen or day_log[3] >= 0):
+        return
+    t = time.localtime()
+    late = (t.tm_hour * 60 + t.tm_min) - (when[0] * 60 + when[1])
+    if not 0 <= late < 60:                # only in the hour after SUMMARY_AT (e.g. 23:00-23:59)
+        return
+    st = summary_send()
+    if st.startswith("sent"):
+        day_log[8] = 1
+        day_save(force=True)
+    else:
+        summary_retry_at = now + 300
+
+
 def pres_tick(now):
     """Every pass of the main loop: read the sensor, count desk time, sleep or wake the screen."""
     global pres_level, pres_seen, pres_here, pres_last_here, pres_changed, pres_session, \
@@ -7379,10 +7518,19 @@ def pres_tick(now):
     dt = min(30.0, max(0.0, now - pres_tick_at))
     pres_tick_at = now
     t = time.localtime()
-    if t.tm_yday != desk_day:                 # new day: desk time starts again
+    if day_log is None or (t.tm_year >= 2024 and (day_log[0], day_log[1]) != (t.tm_year, t.tm_yday)):
+        day_load()                            # first pass with the clock set, or a new day
+    elif t.tm_yday != desk_day:
         desk_day, desk_secs = t.tm_yday, 0.0
     if here:
         desk_secs += dt
+        if day_log is not None:
+            mnow = t.tm_hour * 60 + t.tm_min
+            if day_log[3] < 0:
+                day_log[3] = mnow             # first time at the desk today
+            day_log[4] = mnow
+    day_save()
+    summary_tick(now)
     if not pres_on():
         pres_here = here
         pres_wake(now)
@@ -7394,6 +7542,8 @@ def pres_tick(now):
             gone = now - pres_last_here
             if gone > 180 or pres_session is None:            # a new sitting
                 pres_session, pres_nudged = now, 0
+                if day_log is not None:
+                    day_log[5] += 1
             pres_wake(now)
             pet = EXTRA.get("pet")
             if pet and gone > max(180, away_secs()) and gone < 1e8 and not night_now and \
@@ -7411,10 +7561,14 @@ def pres_tick(now):
     # stretch break: every BREAK_MINUTES of one sitting (a few minutes away ends the sitting)
     brk = 60 * _num(cfg("BREAK_MINUTES") or "60", 0, 600, 60)
     if pres_session is not None and now - pres_last_here > 180:
+        if day_log is not None:                   # the sitting ended: was it the longest?
+            day_log[6] = max(day_log[6], int(pres_last_here - pres_session))
         pres_session = None
     if brk and pres_session is not None and here and not night_now and \
             now - pres_session >= brk * (pres_nudged + 1):
         pres_nudged += 1
+        if day_log is not None:
+            day_log[7] += 1
         pet = EXTRA.get("pet")
         if pet and "pet" in ORDER and not play_name:
             pet.greet_msg = "You've been at the desk %s. Stretch break? *paw*" % dur_text(now - pres_session)

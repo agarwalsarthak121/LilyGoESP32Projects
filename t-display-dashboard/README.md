@@ -112,6 +112,8 @@ If the sensor ever goes quiet (stuck in configuration mode), the board notices: 
 
 **Range rule:** the sensor's Range reading decides who counts. **100 or less** counts as you at the desk, **200 or more** as someone elsewhere in the room (away), and in between keeps the last decision so it doesn't flicker. Change or turn it off in Settings.
 
+**Daily summary:** at **23:00** (Settings → *Daily desk summary to ntfy at*; blank = off) the board sends your ntfy topic a summary of the day: time at the desk, time away between your first arrival and 23:00, number of sittings and the longest one, and break reminders. The day's numbers are saved every 10 minutes, so a restart keeps them. `/presence/summary` shows today's so far and can send it now.
+
 **Fixed objects:** something right next to the sensor (a wireless charger, cables) can read as a person all the time, at the same distance. A person's reading always wobbles, so a reading that stays within 2 for *Ignore a reading that hasn't moved for* seconds (default 60) is learnt as a fixed object and ignored. A reading outside that band counts as a person again at once.
 
 **http://board:8080/presence** is a live test page. It shows the OT2 pin, the sensor's serial lines, the distance, and when the screen will turn off. The screen never turns off until the sensor has seen someone at least once, so an unplugged sensor can't blank the screen.

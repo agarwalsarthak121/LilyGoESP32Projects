@@ -57,6 +57,7 @@ FMP_API_KEY = ""
 # PRES_MIN_M = "0.7"          # ignore anything closer (metres); blank = sensor default
 # PRES_DELAY = "10"           # seconds the sensor waits before reporting nobody; blank = unchanged
 # PRES_TX = "21"              # GPIO wired to the sensor's RX (white). Not 43: the chip prints boot messages there
+# SUMMARY_AT = "23:00"        # daily desk summary to your ntfy topic ("off" = none)
 # PRES_NEAR = "100"           # Range rule: at the desk at this Range or less ("off" = rule off)
 # PRES_FAR = "200"            # Range rule: away at this Range or more; in between keeps the last state
 # NTFY_TOPIC = ""             # ntfy topic for stop-loss/target alerts on My stocks (or set it at /stocks)
