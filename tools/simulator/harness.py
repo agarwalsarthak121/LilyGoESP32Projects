@@ -361,6 +361,7 @@ class DIO:
     @property
     def value(self): return DIO.levels.get(self.pin, True)
     def switch_to_input(self, pull=None): pass
+    def deinit(self): pass
 dio.DigitalInOut = DIO; dio.Pull = types.SimpleNamespace(UP=1, DOWN=2)
 sys.modules["digitalio"] = dio
 bio = types.ModuleType("busio")
@@ -371,6 +372,7 @@ class _UART:
         print("UART rx", rx, baudrate)
     @property
     def in_waiting(self): return len(_UART.feed)
+    def deinit(self): pass
     def read(self, n):
         d = bytes(_UART.feed[:n]); del _UART.feed[:n]; return d or None
 bio.UART = _UART

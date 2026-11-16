@@ -6138,6 +6138,7 @@ pre{background:#1a1a1a;padding:10px;border-radius:8px;font-size:13px;white-space
 </table>
 <p>Last lines from the sensor (GPIO %s):</p><pre id=lines></pre>
 <div class=note id=help></div>
+<p><a href="/presence/scan">Find the sensor wires (pin scan)</a></p>
 <p><a href="/settings#presence">Presence settings</a> &nbsp; <a href="/">Back</a></p>
 <script>
 function ago(s){s=Math.round(s);return s<90?s+"s ago":Math.round(s/60)+" min ago"}
@@ -6168,6 +6169,50 @@ tick();
 def presence_page(request: Request):
     return Response(request, PRES_PAGE % (esc(str(cfg("PRES_PIN") or "16")), esc(str(cfg("PRES_UART") or "44"))),
                     content_type="text/html")
+
+
+@server.route("/presence/scan")
+def presence_scan(request: Request):
+    """Which header pins does the sensor drive? Frees the sensor pins for a moment and samples every
+    free pin: a powered sensor holds its TX high and OT2 high while someone is there."""
+    global pres_io, pres_uart
+    for o in (pres_io, pres_uart):
+        try:
+            if o is not None:
+                o.deinit()
+        except Exception:  # noqa: BLE001
+            pass
+    pres_io = pres_uart = None
+    names = {16: "left 5", 21: "left 6", 17: "left 7", 18: "left 8", 44: "left 9", 43: "left 10",
+             13: "right", 12: "right", 11: "right", 10: "right", 3: "right", 2: "right", 1: "right"}
+    busy = str(cfg("BUZZER_PIN") or "1")
+    rows = []
+    for g, where in names.items():
+        if str(g) == busy and buzzer is not None:
+            rows.append((g, where, "buzzer"))
+            continue
+        try:
+            io = digitalio.DigitalInOut(getattr(microcontroller.pin, "GPIO%d" % g))
+            io.switch_to_input(pull=digitalio.Pull.DOWN)
+            hi = 0
+            for _ in range(300):
+                hi += io.value
+            io.deinit()
+            rows.append((g, where, "HIGH" if hi > 270 else ("toggling (%d%% high)" % (hi // 3)) if hi else "low"))
+        except Exception as e:  # noqa: BLE001
+            rows.append((g, where, "busy (%s)" % type(e).__name__))
+    presence_init()
+    found = [r for r in rows if r[2].startswith(("HIGH", "toggling"))]
+    tip = ("Nothing drives any pin, so the sensor isn't powered (or is faulty). Check its 3V3 and GND "
+           "wires on both ends." if not found else
+           "Pins the sensor drives: %s. Sensor TX sits HIGH all the time; OT2 is HIGH only while "
+           "someone is in front of it. Sit in front of it and scan again, then step away and scan "
+           "once more." % ", ".join("GPIO %d (%s)" % (g, w) for g, w, _ in found))
+    body = "".join("<tr><td>GPIO %d</td><td>%s</td><td>%s</td></tr>" % (g, w, v) for g, w, v in rows)
+    return Response(request, PAGE.replace("Zerodha login", "Find the sensor wires") % (
+        esc(tip), "<table style='width:100%%'><tr><td>Pin</td><td>Header, pin from USB end</td><td>Reads</td></tr>"
+        "%s</table><p><a href='/presence/scan'>Scan again</a> &nbsp; <a href='/presence' "
+        "style='background:#444'>Back</a></p>" % body), content_type="text/html")
 
 
 @server.route("/presence.json")
