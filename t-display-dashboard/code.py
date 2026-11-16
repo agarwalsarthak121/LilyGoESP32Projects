@@ -6167,6 +6167,7 @@ pre{background:#1a1a1a;padding:10px;border-radius:8px;font-size:13px;white-space
 <br>Ignore anything closer than:
 <a href="/presence/range?n=0">0 m</a> &nbsp; <a href="/presence/range?n=0.7">0.7 m</a> &nbsp;
 <a href="/presence/range?n=1.4">1.4 m</a><br>
+<a href="/presence/range">Send the settings to the sensor again</a><br>
 <small>Your chair should sit between the two. Something right next to the sensor (a charger, cables)
 that keeps it saying "someone there": ignore the first 0.7 m and put the sensor 1 m or more from your seat.</small></p>
 <p><a href="/presence/scan">Find the sensor wires (pin scan)</a></p>
@@ -6262,11 +6263,7 @@ def presence_range(request: Request):
         save_cfg()
     except Exception as e:  # noqa: BLE001
         log_err("presence range save: %r" % (e,))
-    if not CFG.get("PRES_MAX_M") and not CFG.get("PRES_MIN_M"):
-        global pres_cfg_msg
-        pres_cfg_msg = "back to the sensor's own range after the next power-off"
-    else:
-        radar_config()
+    radar_config()
     return Response(request, '<!doctype html><meta http-equiv="refresh" content="0;url=/presence">',
                     content_type="text/html")
 
@@ -7132,8 +7129,12 @@ def _radar_frame(cmd, data=b""):
     return b"\xfd\xfc\xfb\xfa" + struct.pack("<H", len(body)) + body + b"\x04\x03\x02\x01"
 
 
+pres_reply = ""               # what the sensor last answered to a command (hex), for the test page
+
+
 def _radar_send(frame, ack):
     """Send one command; True when the sensor answers with the expected ACK."""
+    global pres_reply
     pres_uart.write(frame)
     got = b""
     t_end = time.monotonic() + 0.6
@@ -7142,9 +7143,11 @@ def _radar_send(frame, ack):
         if n:
             got += pres_uart.read(n)
             if ack in got:
-                return True
+                break
         time.sleep(0.02)
-    return False
+    i = got.find(b"\xfd\xfc\xfb\xfa")              # keep only the reply frame, not the ON/Range text
+    pres_reply = " ".join("%02X" % b for b in got[i:i + 24]) if i >= 0 else "no reply frame"
+    return ack in got
 
 
 def pres_max_m():
@@ -7179,16 +7182,24 @@ def radar_config():
     if delay.isdigit():
         params.append((0x0004, min(65535, int(delay))))
     if not params:
-        pres_cfg_msg = "using the sensor's own range"
+        pres_cfg_msg = "nothing to send (range and delay are blank)"
         return
     if pres_uart is None or not getattr(pres_uart, "write", None):
         pres_cfg_msg = "can't send: no serial connection to the sensor"
         return
     try:
-        ok_open = _radar_send(_radar_frame(0x00FF, struct.pack("<H", 1)), b"\xff\x01\x00\x00")
+        ok_open = False
+        for ver in (1, 2):                       # radars in this family want protocol 1 or 2
+            ok_open = _radar_send(_radar_frame(0x00FF, struct.pack("<H", ver)), b"\xff\x01\x00\x00")
+            if ok_open:
+                break
+            time.sleep(0.2)
+        open_reply = pres_reply
         ok_set = _radar_send(_radar_frame(0x0007, b"".join(struct.pack("<HI", k, v) for k, v in params)),
                              b"\x07\x01\x00\x00")
-        _radar_send(_radar_frame(0x00FE), b"\xfe\x01\x00\x00")
+        for _ in range(2):                       # always close configuration, or the sensor goes quiet
+            if _radar_send(_radar_frame(0x00FE), b"\xfe\x01\x00\x00"):
+                break
         what = []
         if far is not None or near is not None:
             what.append("range %.1f to %.1f m" % (params[0][1] * GATE_M, params[1][1] * GATE_M))
@@ -7197,6 +7208,8 @@ def radar_config():
         pres_cfg_msg = ("sensor accepted: " if ok_set else
                         "sent, but the sensor didn't confirm%s (check the white wire: sensor RX -> GPIO 43): "
                         % ("" if ok_open else " anything")) + ", ".join(what)
+        if not ok_set:
+            pres_cfg_msg += " | reply to 'open': %s | reply to 'set': %s" % (open_reply, pres_reply)
     except Exception as e:  # noqa: BLE001
         pres_cfg_msg = "couldn't send: %r" % (e,)
         log_err("presence config: %r" % (e,))
