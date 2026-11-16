@@ -5786,12 +5786,17 @@ def settings_html(msg=""):
                '<label><input type=checkbox name=PRES_GREET value=on%s>Pet says hello when you come back</label>'
                '<label><input type=checkbox name=BUZZ_BREAK value=on%s>Beep for the break reminder</label>'
                '<label><input type=checkbox name=BUZZ_AWAY value=on%s>No beeps while you\'re away</label>'
+               '<label>Only notice people up to <input type=text name=PRES_MAX_M value="%s" style="width:60px"> m '
+               '<small>(blank = the sensor\'s own range; 1.4 for just your chair)</small></label>'
+               '<label>Sensor absence delay <input type=text name=PRES_DELAY value="%s" style="width:60px"> s '
+               '<small>(how long it waits before saying nobody; blank = unchanged)</small></label>'
                '<label>OT2 pin: GPIO <input type=text name=PRES_PIN value="%s" style="width:50px"> '
                'TX pin: GPIO <input type=text name=PRES_UART value="%s" style="width:50px"> '
                '<small>(restart; "off" for none)</small></label>'
                '<p><a href="/presence">Live sensor test</a></p>'
                % (ck("PRESENCE"), esc(str(cfg("AWAY_MINUTES") or "5")), esc(str(cfg("BREAK_MINUTES") or "60")),
                   ck("PRES_GREET"), ck("BUZZ_BREAK"), ck("BUZZ_AWAY"),
+                  esc(str(cfg("PRES_MAX_M") or "")), esc(str(cfg("PRES_DELAY") or "")),
                   esc(str(cfg("PRES_PIN") or "16")), esc(str(cfg("PRES_UART") or "44"))))
     out.append('<h3>Other</h3>'
                '<label>Pet name <input type=text name=PET_NAME value="%s" maxlength=10> <small>(restart)</small></label>'
@@ -5891,6 +5896,13 @@ def settings_save(request: Request):
         CFG[k] = "on" if g(k) else "off"
     CFG["AWAY_MINUTES"] = str(_num(g("AWAY_MINUTES"), 0, 240, 5))
     CFG["BREAK_MINUTES"] = str(_num(g("BREAK_MINUTES"), 0, 600, 60))
+    radar_was = (str(cfg("PRES_MAX_M") or ""), str(cfg("PRES_DELAY") or ""))
+    try:
+        CFG["PRES_MAX_M"] = "%.1f" % float(g("PRES_MAX_M")) if g("PRES_MAX_M") else ""
+    except ValueError:
+        pass
+    pd = g("PRES_DELAY") or ""
+    CFG["PRES_DELAY"] = str(min(65535, int(pd))) if pd.isdigit() else ""
     pres_pins = []
     for k, d in (("PRES_PIN", "16"), ("PRES_UART", "44")):
         v = (g(k) or d).lower()
@@ -5933,6 +5945,9 @@ def settings_save(request: Request):
     except Exception as e:  # noqa: BLE001
         return _page(request, settings_html("Couldn't save: %s" % esc(repr(e))))
     apply_cfg()
+    if (str(cfg("PRES_MAX_M") or ""), str(cfg("PRES_DELAY") or "")) != radar_was:
+        radar_config()
+        notes.append("Presence sensor: %s." % esc(pres_cfg_msg))
     if g("go") == "restart":
         reboot_at = time.monotonic() + 2
         notes.append("Saved. The board restarts in a few seconds - reload this page in about 20 seconds.")
@@ -6129,7 +6144,8 @@ pre{background:#1a1a1a;padding:10px;border-radius:8px;font-size:13px;white-space
 <table>
 <tr><td>OT2 pin (GPIO %s)</td><td id=pin>-</td></tr>
 <tr><td>Serial text says</td><td id=said>-</td></tr>
-<tr><td>Distance</td><td id=dist>-</td></tr>
+<tr><td>Distance reading</td><td id=dist>-</td></tr>
+<tr><td>Sensor settings</td><td id=cfgm>-</td></tr>
 <tr><td>Serial bytes received</td><td id=bytes>-</td></tr>
 <tr><td>Changed</td><td id=chg>-</td></tr>
 <tr><td>Screen</td><td id=scr>-</td></tr>
@@ -6138,6 +6154,10 @@ pre{background:#1a1a1a;padding:10px;border-radius:8px;font-size:13px;white-space
 </table>
 <p>Last lines from the sensor (GPIO %s):</p><pre id=lines></pre>
 <div class=note id=help></div>
+<p>Only notice people up to:
+<a href="/presence/range?m=1.4">1.4 m</a> &nbsp; <a href="/presence/range?m=2.1">2.1 m</a> &nbsp;
+<a href="/presence/range?m=3.5">3.5 m</a> &nbsp; <a href="/presence/range?m=">sensor default</a><br>
+<small>Your chair should be inside this. Start with 1.4 m; if it misses you sitting still, try 2.1 m.</small></p>
 <p><a href="/presence/scan">Find the sensor wires (pin scan)</a></p>
 <p><a href="/settings#presence">Presence settings</a> &nbsp; <a href="/">Back</a></p>
 <script>
@@ -6148,7 +6168,7 @@ function tick(){fetch("/presence.json").then(function(r){return r.json()}).then(
  b.textContent=d.here?"SOMEONE THERE":"NOBODY";b.style.background=d.here?"#1e7a3e":"#5a2a2a";
  pin.textContent=d.pin===null?"not set up":(d.pin?"HIGH (someone there)":"LOW (nobody)");
  said.textContent=d.said===null?"nothing yet":(d.said?"ON":"OFF");
- dist.textContent=d.dist===null?"-":d.dist+" cm";
+ dist.textContent=d.dist===null?"-":"Range "+d.dist;cfgm.textContent=d.cfg;
  bytes.textContent=d.bytes;chg.textContent=ago(d.changed);
  scr.textContent=!d.on?"presence switched off in Settings":(d.asleep?"OFF (nobody here)":
   (d.off_in===null?"on":"on - turns off in "+hm(d.off_in)));
@@ -6215,6 +6235,26 @@ def presence_scan(request: Request):
         "style='background:#444'>Back</a></p>" % body), content_type="text/html")
 
 
+@server.route("/presence/range")
+def presence_range(request: Request):
+    m = (request.query_params.get("m", safe=False) or "").strip()
+    try:
+        CFG["PRES_MAX_M"] = "%.1f" % float(m) if m else ""
+    except ValueError:
+        pass
+    try:
+        save_cfg()
+    except Exception as e:  # noqa: BLE001
+        log_err("presence range save: %r" % (e,))
+    if not CFG["PRES_MAX_M"]:
+        global pres_cfg_msg
+        pres_cfg_msg = "back to the sensor's own range after the next power-off"
+    else:
+        radar_config()
+    return Response(request, '<!doctype html><meta http-equiv="refresh" content="0;url=/presence">',
+                    content_type="text/html")
+
+
 @server.route("/presence.json")
 def presence_json(request: Request):
     now = time.monotonic()
@@ -6226,6 +6266,7 @@ def presence_json(request: Request):
          "bytes": pres_bytes, "changed": now - pres_changed, "asleep": screen_asleep,
          "on": pres_on(), "seen": pres_seen, "off_in": off_in, "desk": desk_secs,
          "sitting": None if pres_session is None else now - pres_session, "err": pres_err,
+         "cfg": pres_cfg_msg,
          "lines": ["%s ago  %s%s" % (_ago(now - t_), ln, "  (x%d)" % n if n > 1 else "")
                    for t_, ln, n in pres_lines]}
     return Response(request, json.dumps(d), content_type="application/json")
@@ -6952,7 +6993,9 @@ def presence_init():
     if rx_no not in ("", "off", "none", "no"):
         try:
             import busio
-            pres_uart = busio.UART(None, getattr(microcontroller.pin, "GPIO" + rx_no), baudrate=115200,
+            tx_no = str(cfg("PRES_TX") or "43").strip().lower()      # to the sensor's RX (settings)
+            tx = None if tx_no in ("", "off", "none", "no") else getattr(microcontroller.pin, "GPIO" + tx_no)
+            pres_uart = busio.UART(tx, getattr(microcontroller.pin, "GPIO" + rx_no), baudrate=115200,
                                    timeout=0, receiver_buffer_size=512)
         except Exception as e:  # noqa: BLE001
             pres_err = (pres_err + "; " if pres_err else "") + "TX on GPIO%s: %r" % (rx_no, e)
@@ -7011,6 +7054,78 @@ def pres_read():
     if len(pres_buf) > 200:                               # no line breaks: binary output
         _pres_line(pres_buf[-24:])
         pres_buf = b""
+
+
+
+# ---- sensor settings (sent over the sensor's RX wire; the radar forgets them when power is lost,
+# so they are sent again at every start). Protocol: frames FD FC FB FA <len> <cmd> <data> 04 03 02 01;
+# 0x00FF opens configuration, 0x0007 writes parameters (0x0000 nearest gate, 0x0001 farthest gate,
+# 0x0004 absence delay in seconds; one gate = 70 cm), 0x00FE closes it.
+GATE_M = 0.7
+pres_cfg_msg = "not sent yet"
+
+
+def _radar_frame(cmd, data=b""):
+    body = struct.pack("<H", cmd) + data
+    return b"\xfd\xfc\xfb\xfa" + struct.pack("<H", len(body)) + body + b"\x04\x03\x02\x01"
+
+
+def _radar_send(frame, ack):
+    """Send one command; True when the sensor answers with the expected ACK."""
+    pres_uart.write(frame)
+    got = b""
+    t_end = time.monotonic() + 0.6
+    while time.monotonic() < t_end:
+        n = pres_uart.in_waiting
+        if n:
+            got += pres_uart.read(n)
+            if ack in got:
+                return True
+        time.sleep(0.02)
+    return False
+
+
+def pres_max_m():
+    """Farthest distance to look (metres), or None for the sensor's own setting."""
+    v = str(cfg("PRES_MAX_M") or "").strip()
+    try:
+        return max(GATE_M, min(15 * GATE_M, float(v))) if v else None
+    except ValueError:
+        return None
+
+
+def radar_config():
+    """Send the range and absence delay to the sensor."""
+    global pres_cfg_msg
+    far = pres_max_m()
+    delay = str(cfg("PRES_DELAY") or "").strip()
+    params = []
+    if far is not None:
+        params += [(0x0000, 0), (0x0001, max(1, min(15, int(far / GATE_M + 0.5))))]
+    if delay.isdigit():
+        params.append((0x0004, min(65535, int(delay))))
+    if not params:
+        pres_cfg_msg = "using the sensor's own range"
+        return
+    if pres_uart is None or not getattr(pres_uart, "write", None):
+        pres_cfg_msg = "can't send: no serial connection to the sensor"
+        return
+    try:
+        ok_open = _radar_send(_radar_frame(0x00FF, struct.pack("<H", 1)), b"\xff\x01\x00\x00")
+        ok_set = _radar_send(_radar_frame(0x0007, b"".join(struct.pack("<HI", k, v) for k, v in params)),
+                             b"\x07\x01\x00\x00")
+        _radar_send(_radar_frame(0x00FE), b"\xfe\x01\x00\x00")
+        what = []
+        if far is not None:
+            what.append("range up to %.1f m" % (params[1][1] * GATE_M))
+        if delay.isdigit():
+            what.append("absence delay %s s" % delay)
+        pres_cfg_msg = ("sensor accepted: " if ok_set else
+                        "sent, but the sensor didn't confirm%s (check the white wire: sensor RX -> GPIO 43): "
+                        % ("" if ok_open else " anything")) + ", ".join(what)
+    except Exception as e:  # noqa: BLE001
+        pres_cfg_msg = "couldn't send: %r" % (e,)
+        log_err("presence config: %r" % (e,))
 
 
 def pres_wake(now):
@@ -7094,6 +7209,7 @@ def desk_text():
 
 
 presence_init()
+radar_config()
 
 
 # ------------------------------------------------------------- start-up

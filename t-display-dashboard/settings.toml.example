@@ -53,6 +53,9 @@ FMP_API_KEY = ""
 # PRES_UART = "44"            # sensor TX (ON/OFF and "Range <cm>" at 115200 baud); "off" for none
 # AWAY_MINUTES = "5"          # screen off after this long with nobody there (0 = never)
 # BREAK_MINUTES = "60"        # stretch-break reminder after this long sitting (0 = off)
+# PRES_MAX_M = "1.4"          # only notice people this close (metres, steps of 0.7); blank = sensor default
+# PRES_DELAY = "10"           # seconds the sensor waits before reporting nobody; blank = unchanged
+# PRES_TX = "43"              # GPIO wired to the sensor's RX (used to send the two settings above)
 # NTFY_TOPIC = ""             # ntfy topic for stop-loss/target alerts on My stocks (or set it at /stocks)
 # SCREEN_ORDER = "weather,ask,todo,portfolio,stocks,heatmap,markets,cricket,stat,news,trivia,net,pet"
 #                             # also available: clock, matrix, fire, stars, plasma, fireworks, mystify, pipes, life, bounce

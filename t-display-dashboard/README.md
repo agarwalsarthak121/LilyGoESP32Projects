@@ -107,6 +107,8 @@ Point the gold antenna side at your chair. What it does:
 - Every **BREAK_MINUTES** of one sitting (default 60), the pet suggests a stretch and the buzzer plays a soft chime.
 - No beeps while you're away (ntfy alerts still go out).
 
+**Range:** radar sees through walls and several metres out, so movement elsewhere in the room or the next room can keep it saying "someone there". On `/presence`, tap **Only notice people up to 1.4 m** (or set *Only notice people up to* in Settings) so only someone in your chair counts. This is sent to the sensor over its RX wire (white, GPIO 43) at every start, because the sensor forgets it when the power goes off. *Sensor absence delay* sets how many seconds it waits before reporting nobody.
+
 **http://board:8080/presence** is a live test page. It shows the OT2 pin, the sensor's serial lines, the distance, and when the screen will turn off. The screen never turns off until the sensor has seen someone at least once, so an unplugged sensor can't blank the screen.
 
 ## Buttons

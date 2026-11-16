@@ -372,6 +372,13 @@ class _UART:
         print("UART rx", rx, baudrate)
     @property
     def in_waiting(self): return len(_UART.feed)
+    sent = []
+    def write(self, b):
+        _UART.sent.append(bytes(b))
+        if b[:4] == b"\xfd\xfc\xfb\xfa" and not os.environ.get("NO_ACK"):
+            cmd = b[6:8]
+            _UART.feed += b"\xfd\xfc\xfb\xfa\x04\x00" + bytes([cmd[0], 1]) + b"\x00\x00\x04\x03\x02\x01"
+        return len(b)
     def deinit(self): pass
     def read(self, n):
         d = bytes(_UART.feed[:n]); del _UART.feed[:n]; return d or None
