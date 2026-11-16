@@ -5788,6 +5788,8 @@ def settings_html(msg=""):
                '<label><input type=checkbox name=BUZZ_AWAY value=on%s>No beeps while you\'re away</label>'
                '<label>Only notice people up to <input type=text name=PRES_MAX_M value="%s" style="width:60px"> m '
                '<small>(blank = the sensor\'s own range; 1.4 for just your chair)</small></label>'
+               '<label>Ignore anything closer than <input type=text name=PRES_MIN_M value="%s" style="width:60px"> m '
+               '<small>(blank = the sensor\'s own; 0.7 skips the first gate)</small></label>'
                '<label>Sensor absence delay <input type=text name=PRES_DELAY value="%s" style="width:60px"> s '
                '<small>(how long it waits before saying nobody; blank = unchanged)</small></label>'
                '<label>OT2 pin: GPIO <input type=text name=PRES_PIN value="%s" style="width:50px"> '
@@ -5796,7 +5798,7 @@ def settings_html(msg=""):
                '<p><a href="/presence">Live sensor test</a></p>'
                % (ck("PRESENCE"), esc(str(cfg("AWAY_MINUTES") or "5")), esc(str(cfg("BREAK_MINUTES") or "60")),
                   ck("PRES_GREET"), ck("BUZZ_BREAK"), ck("BUZZ_AWAY"),
-                  esc(str(cfg("PRES_MAX_M") or "")), esc(str(cfg("PRES_DELAY") or "")),
+                  esc(str(cfg("PRES_MAX_M") or "")), esc(str(cfg("PRES_MIN_M") or "")), esc(str(cfg("PRES_DELAY") or "")),
                   esc(str(cfg("PRES_PIN") or "16")), esc(str(cfg("PRES_UART") or "44"))))
     out.append('<h3>Other</h3>'
                '<label>Pet name <input type=text name=PET_NAME value="%s" maxlength=10> <small>(restart)</small></label>'
@@ -5896,11 +5898,12 @@ def settings_save(request: Request):
         CFG[k] = "on" if g(k) else "off"
     CFG["AWAY_MINUTES"] = str(_num(g("AWAY_MINUTES"), 0, 240, 5))
     CFG["BREAK_MINUTES"] = str(_num(g("BREAK_MINUTES"), 0, 600, 60))
-    radar_was = (str(cfg("PRES_MAX_M") or ""), str(cfg("PRES_DELAY") or ""))
-    try:
-        CFG["PRES_MAX_M"] = "%.1f" % float(g("PRES_MAX_M")) if g("PRES_MAX_M") else ""
-    except ValueError:
-        pass
+    radar_was = (str(cfg("PRES_MAX_M") or ""), str(cfg("PRES_MIN_M") or ""), str(cfg("PRES_DELAY") or ""))
+    for k in ("PRES_MAX_M", "PRES_MIN_M"):
+        try:
+            CFG[k] = "%.1f" % float(g(k)) if g(k) else ""
+        except ValueError:
+            pass
     pd = g("PRES_DELAY") or ""
     CFG["PRES_DELAY"] = str(min(65535, int(pd))) if pd.isdigit() else ""
     pres_pins = []
@@ -5945,7 +5948,7 @@ def settings_save(request: Request):
     except Exception as e:  # noqa: BLE001
         return _page(request, settings_html("Couldn't save: %s" % esc(repr(e))))
     apply_cfg()
-    if (str(cfg("PRES_MAX_M") or ""), str(cfg("PRES_DELAY") or "")) != radar_was:
+    if (str(cfg("PRES_MAX_M") or ""), str(cfg("PRES_MIN_M") or ""), str(cfg("PRES_DELAY") or "")) != radar_was:
         radar_config()
         notes.append("Presence sensor: %s." % esc(pres_cfg_msg))
     if g("go") == "restart":
@@ -6157,7 +6160,11 @@ pre{background:#1a1a1a;padding:10px;border-radius:8px;font-size:13px;white-space
 <p>Only notice people up to:
 <a href="/presence/range?m=1.4">1.4 m</a> &nbsp; <a href="/presence/range?m=2.1">2.1 m</a> &nbsp;
 <a href="/presence/range?m=3.5">3.5 m</a> &nbsp; <a href="/presence/range?m=">sensor default</a><br>
-<small>Your chair should be inside this. Start with 1.4 m; if it misses you sitting still, try 2.1 m.</small></p>
+<br>Ignore anything closer than:
+<a href="/presence/range?n=0">0 m</a> &nbsp; <a href="/presence/range?n=0.7">0.7 m</a> &nbsp;
+<a href="/presence/range?n=1.4">1.4 m</a><br>
+<small>Your chair should sit between the two. Something right next to the sensor (a charger, cables)
+that keeps it saying "someone there": ignore the first 0.7 m and put the sensor 1 m or more from your seat.</small></p>
 <p><a href="/presence/scan">Find the sensor wires (pin scan)</a></p>
 <p><a href="/settings#presence">Presence settings</a> &nbsp; <a href="/">Back</a></p>
 <script>
@@ -6237,16 +6244,20 @@ def presence_scan(request: Request):
 
 @server.route("/presence/range")
 def presence_range(request: Request):
-    m = (request.query_params.get("m", safe=False) or "").strip()
-    try:
-        CFG["PRES_MAX_M"] = "%.1f" % float(m) if m else ""
-    except ValueError:
-        pass
+    q = request.query_params
+    for key, cfg_key in (("m", "PRES_MAX_M"), ("n", "PRES_MIN_M")):
+        v = q.get(key, safe=False)
+        if v is None:
+            continue
+        try:
+            CFG[cfg_key] = "%.1f" % float(v.strip()) if v.strip() else ""
+        except ValueError:
+            pass
     try:
         save_cfg()
     except Exception as e:  # noqa: BLE001
         log_err("presence range save: %r" % (e,))
-    if not CFG["PRES_MAX_M"]:
+    if not CFG.get("PRES_MAX_M") and not CFG.get("PRES_MIN_M"):
         global pres_cfg_msg
         pres_cfg_msg = "back to the sensor's own range after the next power-off"
     else:
@@ -7094,14 +7105,26 @@ def pres_max_m():
         return None
 
 
+def pres_min_m():
+    """Ignore anything closer than this (metres), or None for the sensor's own setting."""
+    v = str(cfg("PRES_MIN_M") or "").strip()
+    try:
+        return max(0.0, min(14 * GATE_M, float(v))) if v else None
+    except ValueError:
+        return None
+
+
 def radar_config():
     """Send the range and absence delay to the sensor."""
     global pres_cfg_msg
     far = pres_max_m()
     delay = str(cfg("PRES_DELAY") or "").strip()
     params = []
-    if far is not None:
-        params += [(0x0000, 0), (0x0001, max(1, min(15, int(far / GATE_M + 0.5))))]
+    near = pres_min_m()
+    if far is not None or near is not None:
+        g_near = int((near or 0) / GATE_M + 0.5)
+        g_far = max(g_near + 1, min(15, int((far or 12 * GATE_M) / GATE_M + 0.5)))
+        params += [(0x0000, g_near), (0x0001, g_far)]
     if delay.isdigit():
         params.append((0x0004, min(65535, int(delay))))
     if not params:
@@ -7116,8 +7139,8 @@ def radar_config():
                              b"\x07\x01\x00\x00")
         _radar_send(_radar_frame(0x00FE), b"\xfe\x01\x00\x00")
         what = []
-        if far is not None:
-            what.append("range up to %.1f m" % (params[1][1] * GATE_M))
+        if far is not None or near is not None:
+            what.append("range %.1f to %.1f m" % (params[0][1] * GATE_M, params[1][1] * GATE_M))
         if delay.isdigit():
             what.append("absence delay %s s" % delay)
         pres_cfg_msg = ("sensor accepted: " if ok_set else
