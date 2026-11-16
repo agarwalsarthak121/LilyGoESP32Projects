@@ -5794,14 +5794,21 @@ def settings_html(msg=""):
                '<small>(something fixed next to the sensor; a person always wobbles. 0 = off)</small></label>'
                '<label>Sensor absence delay <input type=text name=PRES_DELAY value="%s" style="width:60px"> s '
                '<small>(how long it waits before saying nobody; blank = unchanged)</small></label>'
-               '<label>OT2 pin: GPIO <input type=text name=PRES_PIN value="%s" style="width:50px"> '
-               'TX pin: GPIO <input type=text name=PRES_UART value="%s" style="width:50px"> '
+               '<label>At the desk when Range is <input type=text name=PRES_NEAR value="%s" style="width:60px"> or less, '
+               'away when it is <input type=text name=PRES_FAR value="%s" style="width:60px"> or more '
+               '<small>(in between keeps the last state; blank either to turn this off)</small></label>'
+               '<label>Sensor OT2 (purple) on GPIO <input type=text name=PRES_PIN value="%s" style="width:50px"> '
+               'TX (blue) on GPIO <input type=text name=PRES_UART value="%s" style="width:50px"> '
+               'RX (white) on GPIO <input type=text name=PRES_TX value="%s" style="width:50px"> '
                '<small>(restart; "off" for none)</small></label>'
                '<p><a href="/presence">Live sensor test</a></p>'
                % (ck("PRESENCE"), esc(str(cfg("AWAY_MINUTES") or "5")), esc(str(cfg("BREAK_MINUTES") or "60")),
                   ck("PRES_GREET"), ck("BUZZ_BREAK"), ck("BUZZ_AWAY"),
                   esc(str(cfg("PRES_MAX_M") or "")), esc(str(cfg("PRES_MIN_M") or "")), pres_still_secs(), esc(str(cfg("PRES_DELAY") or "")),
-                  esc(str(cfg("PRES_PIN") or "16")), esc(str(cfg("PRES_UART") or "44"))))
+                  "" if str(cfg("PRES_NEAR")) == "off" else esc(str(cfg("PRES_NEAR") or "100")),
+                  "" if str(cfg("PRES_FAR")) == "off" else esc(str(cfg("PRES_FAR") or "200")),
+                  esc(str(cfg("PRES_PIN") or "16")), esc(str(cfg("PRES_UART") or "44")),
+                  esc(str(cfg("PRES_TX") or "21"))))
     out.append('<h3>Other</h3>'
                '<label>Pet name <input type=text name=PET_NAME value="%s" maxlength=10> <small>(restart)</small></label>'
                '<label>Internet screen pings <input type=text name=PING_HOST value="%s" style="width:140px"></label>'
@@ -5910,7 +5917,10 @@ def settings_save(request: Request):
     pd = g("PRES_DELAY") or ""
     CFG["PRES_DELAY"] = str(min(65535, int(pd))) if pd.isdigit() else ""
     pres_pins = []
-    for k, d in (("PRES_PIN", "16"), ("PRES_UART", "44")):
+    for k in ("PRES_NEAR", "PRES_FAR"):
+        v = g(k) or ""
+        CFG[k] = v if v.isdigit() else "off"
+    for k, d in (("PRES_PIN", "16"), ("PRES_UART", "44"), ("PRES_TX", "21")):
         v = (g(k) or d).lower()
         if (v.isdigit() and int(v) < 49) or v == "off":
             if v != str(cfg(k) or d):
@@ -6151,6 +6161,7 @@ pre{background:#1a1a1a;padding:10px;border-radius:8px;font-size:13px;white-space
 <tr><td>Serial text says</td><td id=said>-</td></tr>
 <tr><td>Distance reading</td><td id=dist>-</td></tr>
 <tr><td>Sensor settings</td><td id=cfgm>-</td></tr>
+<tr><td>Range rule</td><td id=rule>-</td></tr>
 <tr><td>Fixed object ignored</td><td id=fixd>-</td></tr>
 <tr><td>Serial bytes received</td><td id=bytes>-</td></tr>
 <tr><td>Changed</td><td id=chg>-</td></tr>
@@ -6183,7 +6194,7 @@ function tick(){fetch("/presence.json").then(function(r){return r.json()}).then(
  fixd.textContent=d.band===null?"none found yet":("Range "+d.band+(d.phantom?" - ignoring it now":""));b.style.background=d.here?"#1e7a3e":"#5a2a2a";
  pin.textContent=d.pin===null?"not set up":(d.pin?"HIGH (someone there)":"LOW (nobody)");
  said.textContent=d.said===null?"nothing yet":(d.said?"ON":"OFF");
- dist.textContent=d.dist===null?"-":"Range "+d.dist;cfgm.textContent=d.cfg;
+ dist.textContent=d.dist===null?"-":"Range "+d.dist;cfgm.textContent=d.cfg;rule.textContent=d.rule;
  bytes.textContent=d.bytes;chg.textContent=ago(d.changed);
  scr.textContent=!d.on?"presence switched off in Settings":(d.asleep?"OFF (nobody here)":
   (d.off_in===null?"on":"on - turns off in "+hm(d.off_in)));
@@ -6302,6 +6313,11 @@ def presence_json(request: Request):
          "on": pres_on(), "seen": pres_seen, "off_in": off_in, "desk": desk_secs,
          "sitting": None if pres_session is None else now - pres_session, "err": pres_err,
          "cfg": pres_cfg_msg, "phantom": pres_phantom,
+         "rule": ("off" if not pres_limits() else
+                  "at the desk at Range %d or less, away at %d or more - now: %s" % (
+                      pres_limits()[0], pres_limits()[1],
+                      "no reading" if pres_rstate is None or now - pres_rng_at > 5 else
+                      ("at the desk" if pres_rstate else "too far, counts as away"))),
          "band": None if pres_band is None else "%d-%d" % (pres_band[0] + 1, pres_band[1] - 1),
          "lines": ["%s ago  %s%s" % (_ago(now - t_), ln, "  (x%d)" % n if n > 1 else "")
                    for t_, ln, n in pres_lines]}
@@ -7007,7 +7023,28 @@ pres_band = None             # (lo, hi) of the fixed object, once learnt
 pres_phantom = False         # True while the sensor only sees the fixed object
 
 
+pres_rstate = None           # Range rule: True = at the desk, False = away, None = no reading yet
+pres_rng_at = -1e9           # when the last Range reading came
+
+
+def pres_limits():
+    """(near, far) for the Range rule; None when it's switched off."""
+    near, far = str(cfg("PRES_NEAR") or "100").strip(), str(cfg("PRES_FAR") or "200").strip()
+    if not (near.isdigit() and far.isdigit()) or int(far) <= int(near):
+        return None
+    return int(near), int(far)
+
+
 def pres_note_range(v):
+    global pres_rstate, pres_rng_at
+    pres_rng_at = time.monotonic()
+    lim = pres_limits()
+    if lim:
+        if v <= lim[0]:
+            pres_rstate = True                # close: you're at the desk
+        elif v >= lim[1]:
+            pres_rstate = False               # far: someone elsewhere in the room
+        # in between: keep what it was
     sec = int(time.monotonic())
     if pres_rng and pres_rng[-1][0] == sec:
         b = pres_rng[-1]
@@ -7072,7 +7109,7 @@ def presence_init():
     if rx_no not in ("", "off", "none", "no"):
         try:
             import busio
-            tx_no = str(cfg("PRES_TX") or "43").strip().lower()      # to the sensor's RX (settings)
+            tx_no = str(cfg("PRES_TX") or "21").strip().lower()      # to the sensor's RX (white wire)
             tx = None if tx_no in ("", "off", "none", "no") else getattr(microcontroller.pin, "GPIO" + tx_no)
             pres_uart = busio.UART(tx, getattr(microcontroller.pin, "GPIO" + rx_no), baudrate=115200,
                                    timeout=0, receiver_buffer_size=512)
@@ -7083,7 +7120,7 @@ def presence_init():
 
 def _pres_line(raw):
     """One line of the sensor's text output."""
-    global pres_said, pres_dist
+    global pres_said, pres_dist, pres_rstate
     if all(32 <= b < 127 or b == 9 for b in raw):
         line = raw.decode().strip()
     else:                                    # not text (report mode): show it as hex
@@ -7096,6 +7133,7 @@ def _pres_line(raw):
     elif up == "OFF":
         pres_said = False
         pres_dist = None
+        pres_rstate = None
     elif up.startswith("RANGE"):
         try:
             pres_dist = int(up.split()[-1])
@@ -7234,7 +7272,7 @@ def radar_hello():
                     (" with firmware " + ver if ver else "", " ".join("%02X" % b for b in frame)))
         text = got.replace(b"\r", b"").replace(b"\n", b" ")[:40]
         return ("no answer to the version request - the sensor isn't hearing the board "
-                "(white wire / GPIO 43). Got %d bytes of normal text: %s" % (len(got), text))
+                "(white wire / GPIO 21). Got %d bytes of normal text: %s" % (len(got), text))
     except Exception as e:  # noqa: BLE001
         return "test failed: %r" % (e,)
 
@@ -7302,7 +7340,7 @@ def radar_config():
         if delay.isdigit():
             what.append("absence delay %s s" % delay)
         pres_cfg_msg = ("sensor accepted: " if ok_set else
-                        "sent, but the sensor didn't confirm%s (check the white wire: sensor RX -> GPIO 43): "
+                        "sent, but the sensor didn't confirm%s (check the white wire: sensor RX -> GPIO 21): "
                         % ("" if ok_open else " anything")) + ", ".join(what)
         if not ok_set:
             pres_cfg_msg += " | reply to 'open': %s | reply to 'set': %s" % (open_reply, pres_reply)
@@ -7331,6 +7369,8 @@ def pres_tick(now):
         except Exception:  # noqa: BLE001
             pres_level = None
     here = pres_level if pres_level is not None else bool(pres_said)
+    if here and pres_rstate is False and pres_limits() and now - pres_rng_at < 5:
+        here = False                      # Range rule: the person it sees is too far away
     pres_phantom = bool(here) and pres_fixed_only(now)
     if pres_phantom:
         here = False

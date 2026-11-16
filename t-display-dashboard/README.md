@@ -97,7 +97,7 @@ No soldering: jumper wires from its 5-pin header to the LilyGO's **left header**
 | GND | 2 (G) |
 | OT2 | 5 (GPIO 16) |
 | TX | 9 (GPIO 44) |
-| RX | 10 (GPIO 43, not used yet) |
+| RX | 6 (GPIO 21), optional. Not GPIO 43: the ESP32-S3 prints boot messages there, which freezes the sensor |
 
 Point the gold antenna side at your chair. What it does:
 
@@ -107,8 +107,10 @@ Point the gold antenna side at your chair. What it does:
 - Every **BREAK_MINUTES** of one sitting (default 60), the pet suggests a stretch and the buzzer plays a soft chime.
 - No beeps while you're away (ntfy alerts still go out).
 
-**Range:** radar sees through walls and several metres out, so movement elsewhere in the room or the next room can keep it saying "someone there". On `/presence`, tap **Only notice people up to 1.4 m** (or set *Only notice people up to* in Settings) so only someone in your chair counts. This is sent to the sensor over its RX wire (white, GPIO 43) at every start, because the sensor forgets it when the power goes off. *Sensor absence delay* sets how many seconds it waits before reporting nobody.
+**Range:** radar sees through walls and several metres out, so movement elsewhere in the room or the next room can keep it saying "someone there". On `/presence`, tap **Only notice people up to 1.4 m** (or set *Only notice people up to* in Settings) so only someone in your chair counts. This is sent to the sensor over its RX wire (white, GPIO 21) at every start, because the sensor forgets it when the power goes off. *Sensor absence delay* sets how many seconds it waits before reporting nobody.
 If the sensor ever goes quiet (stuck in configuration mode), the board notices: it closes configuration again and, if needed, restarts the sensor. This happens after every settings change and at start-up, and there is an **Unstick it** link on `/presence`. If it is still silent, unplug the USB for 10 seconds.
+
+**Range rule:** the sensor's Range reading decides who counts. **100 or less** counts as you at the desk, **200 or more** as someone elsewhere in the room (away), and in between keeps the last decision so it doesn't flicker. Change or turn it off in Settings.
 
 **Fixed objects:** something right next to the sensor (a wireless charger, cables) can read as a person all the time, at the same distance. A person's reading always wobbles, so a reading that stays within 2 for *Ignore a reading that hasn't moved for* seconds (default 60) is learnt as a fixed object and ignored. A reading outside that band counts as a person again at once.
 

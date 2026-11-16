@@ -56,7 +56,9 @@ FMP_API_KEY = ""
 # PRES_MAX_M = "1.4"          # only notice people this close (metres, steps of 0.7); blank = sensor default
 # PRES_MIN_M = "0.7"          # ignore anything closer (metres); blank = sensor default
 # PRES_DELAY = "10"           # seconds the sensor waits before reporting nobody; blank = unchanged
-# PRES_TX = "43"              # GPIO wired to the sensor's RX (used to send the two settings above)
+# PRES_TX = "21"              # GPIO wired to the sensor's RX (white). Not 43: the chip prints boot messages there
+# PRES_NEAR = "100"           # Range rule: at the desk at this Range or less ("off" = rule off)
+# PRES_FAR = "200"            # Range rule: away at this Range or more; in between keeps the last state
 # NTFY_TOPIC = ""             # ntfy topic for stop-loss/target alerts on My stocks (or set it at /stocks)
 # SCREEN_ORDER = "weather,ask,todo,portfolio,stocks,heatmap,markets,cricket,stat,news,trivia,net,pet"
 #                             # also available: clock, matrix, fire, stars, plasma, fireworks, mystify, pipes, life, bounce
