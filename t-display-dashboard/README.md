@@ -109,6 +109,8 @@ Point the gold antenna side at your chair. What it does:
 
 **Range:** radar sees through walls and several metres out, so movement elsewhere in the room or the next room can keep it saying "someone there". On `/presence`, tap **Only notice people up to 1.4 m** (or set *Only notice people up to* in Settings) so only someone in your chair counts. This is sent to the sensor over its RX wire (white, GPIO 43) at every start, because the sensor forgets it when the power goes off. *Sensor absence delay* sets how many seconds it waits before reporting nobody.
 
+**Fixed objects:** something right next to the sensor (a wireless charger, cables) can read as a person all the time, at the same distance. A person's reading always wobbles, so a reading that stays within 2 for *Ignore a reading that hasn't moved for* seconds (default 60) is learnt as a fixed object and ignored. A reading outside that band counts as a person again at once.
+
 **http://board:8080/presence** is a live test page. It shows the OT2 pin, the sensor's serial lines, the distance, and when the screen will turn off. The screen never turns off until the sensor has seen someone at least once, so an unplugged sensor can't blank the screen.
 
 ## Buttons

@@ -5790,6 +5790,8 @@ def settings_html(msg=""):
                '<small>(blank = the sensor\'s own range; 1.4 for just your chair)</small></label>'
                '<label>Ignore anything closer than <input type=text name=PRES_MIN_M value="%s" style="width:60px"> m '
                '<small>(blank = the sensor\'s own; 0.7 skips the first gate)</small></label>'
+               '<label>Ignore a reading that hasn\'t moved for <input type=number name=PRES_STILL min=0 max=600 value=%s> s '
+               '<small>(something fixed next to the sensor; a person always wobbles. 0 = off)</small></label>'
                '<label>Sensor absence delay <input type=text name=PRES_DELAY value="%s" style="width:60px"> s '
                '<small>(how long it waits before saying nobody; blank = unchanged)</small></label>'
                '<label>OT2 pin: GPIO <input type=text name=PRES_PIN value="%s" style="width:50px"> '
@@ -5798,7 +5800,7 @@ def settings_html(msg=""):
                '<p><a href="/presence">Live sensor test</a></p>'
                % (ck("PRESENCE"), esc(str(cfg("AWAY_MINUTES") or "5")), esc(str(cfg("BREAK_MINUTES") or "60")),
                   ck("PRES_GREET"), ck("BUZZ_BREAK"), ck("BUZZ_AWAY"),
-                  esc(str(cfg("PRES_MAX_M") or "")), esc(str(cfg("PRES_MIN_M") or "")), esc(str(cfg("PRES_DELAY") or "")),
+                  esc(str(cfg("PRES_MAX_M") or "")), esc(str(cfg("PRES_MIN_M") or "")), pres_still_secs(), esc(str(cfg("PRES_DELAY") or "")),
                   esc(str(cfg("PRES_PIN") or "16")), esc(str(cfg("PRES_UART") or "44"))))
     out.append('<h3>Other</h3>'
                '<label>Pet name <input type=text name=PET_NAME value="%s" maxlength=10> <small>(restart)</small></label>'
@@ -5898,6 +5900,7 @@ def settings_save(request: Request):
         CFG[k] = "on" if g(k) else "off"
     CFG["AWAY_MINUTES"] = str(_num(g("AWAY_MINUTES"), 0, 240, 5))
     CFG["BREAK_MINUTES"] = str(_num(g("BREAK_MINUTES"), 0, 600, 60))
+    CFG["PRES_STILL"] = str(_num(g("PRES_STILL"), 0, 600, 60))
     radar_was = (str(cfg("PRES_MAX_M") or ""), str(cfg("PRES_MIN_M") or ""), str(cfg("PRES_DELAY") or ""))
     for k in ("PRES_MAX_M", "PRES_MIN_M"):
         try:
@@ -6149,6 +6152,7 @@ pre{background:#1a1a1a;padding:10px;border-radius:8px;font-size:13px;white-space
 <tr><td>Serial text says</td><td id=said>-</td></tr>
 <tr><td>Distance reading</td><td id=dist>-</td></tr>
 <tr><td>Sensor settings</td><td id=cfgm>-</td></tr>
+<tr><td>Fixed object ignored</td><td id=fixd>-</td></tr>
 <tr><td>Serial bytes received</td><td id=bytes>-</td></tr>
 <tr><td>Changed</td><td id=chg>-</td></tr>
 <tr><td>Screen</td><td id=scr>-</td></tr>
@@ -6172,7 +6176,8 @@ function ago(s){s=Math.round(s);return s<90?s+"s ago":Math.round(s/60)+" min ago
 function hm(s){var m=Math.floor(s/60);return m>=60?Math.floor(m/60)+"h "+(m%%60)+"m":m+" min"}
 function tick(){fetch("/presence.json").then(function(r){return r.json()}).then(function(d){
  var b=document.getElementById("big");
- b.textContent=d.here?"SOMEONE THERE":"NOBODY";b.style.background=d.here?"#1e7a3e":"#5a2a2a";
+ b.textContent=d.here?"SOMEONE THERE":(d.phantom?"NOBODY (only the fixed object)":"NOBODY");
+ fixd.textContent=d.band===null?"none found yet":("Range "+d.band+(d.phantom?" - ignoring it now":""));b.style.background=d.here?"#1e7a3e":"#5a2a2a";
  pin.textContent=d.pin===null?"not set up":(d.pin?"HIGH (someone there)":"LOW (nobody)");
  said.textContent=d.said===null?"nothing yet":(d.said?"ON":"OFF");
  dist.textContent=d.dist===null?"-":"Range "+d.dist;cfgm.textContent=d.cfg;
@@ -6277,7 +6282,8 @@ def presence_json(request: Request):
          "bytes": pres_bytes, "changed": now - pres_changed, "asleep": screen_asleep,
          "on": pres_on(), "seen": pres_seen, "off_in": off_in, "desk": desk_secs,
          "sitting": None if pres_session is None else now - pres_session, "err": pres_err,
-         "cfg": pres_cfg_msg,
+         "cfg": pres_cfg_msg, "phantom": pres_phantom,
+         "band": None if pres_band is None else "%d-%d" % (pres_band[0] + 1, pres_band[1] - 1),
          "lines": ["%s ago  %s%s" % (_ago(now - t_), ln, "  (x%d)" % n if n > 1 else "")
                    for t_, ln, n in pres_lines]}
     return Response(request, json.dumps(d), content_type="application/json")
@@ -6973,6 +6979,49 @@ pres_changed = time.monotonic()
 pres_session = None          # monotonic: start of this sitting
 pres_nudged = 0              # break reminders given this sitting
 desk_secs = 0.0
+# "fixed object" filter: a person's distance reading always wobbles (sitting: 15, 30, 20...), but
+# something next to the sensor (a charger, cables) reads the same number for minutes on end.
+# A reading that stays within 2 for PRES_STILL seconds is learnt as a fixed object and ignored;
+# a reading outside that band counts as a person again straight away.
+pres_rng = []                # [second, lowest, highest] reading for each second (last 2 minutes)
+pres_band = None             # (lo, hi) of the fixed object, once learnt
+pres_phantom = False         # True while the sensor only sees the fixed object
+
+
+def pres_note_range(v):
+    sec = int(time.monotonic())
+    if pres_rng and pres_rng[-1][0] == sec:
+        b = pres_rng[-1]
+        b[1], b[2] = min(b[1], v), max(b[2], v)
+    else:
+        pres_rng.append([sec, v, v])
+        while pres_rng and sec - pres_rng[0][0] > 120:
+            pres_rng.pop(0)
+
+
+def pres_still_secs():
+    v = str(cfg("PRES_STILL") or "60").strip()
+    return int(v) if v.isdigit() else 60
+
+
+def pres_fixed_only(now):
+    """True when the only thing the sensor sees is the fixed object."""
+    global pres_band
+    w = pres_still_secs()
+    if not w or not pres_rng:
+        return False
+    sec = int(now)
+    recent = [b for b in pres_rng if sec - b[0] <= w]
+    if len(recent) >= max(5, int(w * 0.7)):
+        lo, hi = min(b[1] for b in recent), max(b[2] for b in recent)
+        if hi - lo <= 2:
+            pres_band = (lo - 1, hi + 1)
+            return True
+    if pres_band:
+        last = [b for b in pres_rng if sec - b[0] <= 3]
+        if last and all(pres_band[0] <= b[1] and b[2] <= pres_band[1] for b in last):
+            return True
+    return False
 desk_day = -1
 pres_tick_at = time.monotonic()
 
@@ -7031,6 +7080,7 @@ def _pres_line(raw):
     elif up.startswith("RANGE"):
         try:
             pres_dist = int(up.split()[-1])
+            pres_note_range(pres_dist)
         except (ValueError, IndexError):
             pass
     if pres_lines and pres_lines[-1][1] == line:          # repeats: just count them
@@ -7059,6 +7109,7 @@ def pres_read():
     if i >= 0 and len(pres_buf) >= i + 9:
         pres_said = pres_buf[i + 6] == 1
         pres_dist = pres_buf[i + 7] | (pres_buf[i + 8] << 8)
+        pres_note_range(pres_dist)
     while b"\n" in pres_buf:
         raw, pres_buf = pres_buf.split(b"\n", 1)
         _pres_line(raw.strip(b"\r"))
@@ -7161,7 +7212,7 @@ def pres_wake(now):
 def pres_tick(now):
     """Every pass of the main loop: read the sensor, count desk time, sleep or wake the screen."""
     global pres_level, pres_seen, pres_here, pres_last_here, pres_changed, pres_session, \
-        pres_nudged, desk_secs, desk_day, pres_tick_at, screen_asleep, force_show
+        pres_nudged, desk_secs, desk_day, pres_tick_at, screen_asleep, force_show, pres_phantom
     pres_read()
     if pres_io is not None:
         try:
@@ -7169,6 +7220,9 @@ def pres_tick(now):
         except Exception:  # noqa: BLE001
             pres_level = None
     here = pres_level if pres_level is not None else bool(pres_said)
+    pres_phantom = bool(here) and pres_fixed_only(now)
+    if pres_phantom:
+        here = False
     if here or pres_said:
         pres_seen = True
     dt = min(30.0, max(0.0, now - pres_tick_at))
