@@ -86,6 +86,29 @@ The original grey look:
 
   ![Animations](docs/extra-animations.png)
 
+## Presence sensor (optional)
+
+A Waveshare HMMD mmWave radar (24 GHz) tells the board whether you're at the desk.
+No soldering: jumper wires from its 5-pin header to the LilyGO's **left header**, counting pins from the USB end:
+
+| Sensor | LilyGO pin |
+|---|---|
+| 3V3 | 1 (3V) |
+| GND | 2 (G) |
+| OT2 | 5 (GPIO 16) |
+| TX | 9 (GPIO 44) |
+| RX | 10 (GPIO 43, not used yet) |
+
+Point the gold antenna side at your chair. What it does:
+
+- The screen turns off after **AWAY_MINUTES** (default 5) with nobody there, and comes back the moment you sit down. A button press wakes it too; that first press doesn't change the screen.
+- After you've been away a while, the pet says hello.
+- The clock screen shows **AT DESK 3H 20M**, today's desk time.
+- Every **BREAK_MINUTES** of one sitting (default 60), the pet suggests a stretch and the buzzer plays a soft chime.
+- No beeps while you're away (ntfy alerts still go out).
+
+**http://board:8080/presence** is a live test page. It shows the OT2 pin, the sensor's serial lines, the distance, and when the screen will turn off. The screen never turns off until the sensor has seen someone at least once, so an unplugged sensor can't blank the screen.
+
 ## Buttons
 
 - **KEY** (GPIO14): next screen. At night it wakes the other screens for 60 seconds.
@@ -107,6 +130,7 @@ Open `http://<board-ip>:8080` on a phone or laptop on the same Wi-Fi:
 | `/` | Kite login link, paste-the-redirect-URL form, links to everything below |
 | `/todo` | Add, tick off, edit, reorder and clear to-do tasks |
 | `/anim` | Play an animation now, for a set time or until stopped |
+| `/presence` | Live presence-sensor test: OT2 pin, serial lines, distance, desk time |
 | `/ask` | Ask Gemini a question; the answer goes on the Ask AI screen |
 | `/stocks` | Pick the holdings and open positions for the My stocks screen, set stop-loss/target alerts and the ntfy topic, reorder or remove them; shows each one's LTP, today's move and P&L |
 | `/settings` | **Settings**: turn screens on/off, reorder them, jump to one; auto-rotate and seconds per screen; night mode on/off, hours, night screen and brightness; theme and day brightness; news, trivia, cricket, weather town, pet name, ping host |

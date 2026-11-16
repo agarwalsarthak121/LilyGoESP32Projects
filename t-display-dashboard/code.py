@@ -1231,10 +1231,14 @@ DAYS = ("MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUN
 MONTHS = ("JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC")
 
 
+def desk_text():                 # replaced by the presence sensor code further down
+    return ""
+
+
 def clock_minute(t):
     lbl_cday.text = DAYS[t.tm_wday]
     lbl_cdate.text = "%02d %s" % (t.tm_mday, MONTHS[t.tm_mon - 1])
-    lbl_cyear.text = str(t.tm_year)
+    lbl_cyear.text = desk_text() or str(t.tm_year)
     lbl_wday.text = DAYS[t.tm_wday][:3]
     lbl_wdate.text = "%02d %s" % (t.tm_mday, MONTHS[t.tm_mon - 1])
     frac = (t.tm_hour * 60 + t.tm_min) / 1440
@@ -2259,6 +2263,8 @@ class PetScreen(Screen):
         self.poses = {}
         self.eat_until = 0.0
         self.thanks_until = 0.0
+        self.greet_until = 0.0       # presence sensor: "welcome back" / "stretch break" message
+        self.greet_msg = ""
         self.next_blink = 0.0
         self.blink_until = 0.0
         self.anim_t = 0.0
@@ -2306,6 +2312,8 @@ class PetScreen(Screen):
             return "happy" if not (is_night(t) or t.tm_hour < 6) else "sleep"
         if is_night(t) or t.tm_hour < 6:
             return "sleep"
+        if now < self.greet_until:
+            return "ecstatic"
         if now < self.eat_until:
             return "eat"
         if self.born and self.hours_hungry() > 8:
@@ -2321,6 +2329,8 @@ class PetScreen(Screen):
 
     def words(self, mood, now):
         pct = port_day_pct
+        if now < self.greet_until and mood != "sleep":
+            return self.greet_msg
         if now < self.thanks_until and mood != "eat":
             return "Woof! Thank you, that roti was yummy."
         if not self.born:
@@ -3786,9 +3796,15 @@ DAY_BRIGHT = float(cfg("DAY_BRIGHTNESS") or "0.6")
 NIGHT_BRIGHT = float(cfg("NIGHT_BRIGHTNESS") or "0.05")
 
 
+want_bright = DAY_BRIGHT     # what the screen should be at (day or night level)
+screen_asleep = False        # backlight off because nobody is at the desk (presence sensor)
+
+
 def set_brightness(v):
+    global want_bright
+    want_bright = v
     try:
-        display.brightness = v
+        display.brightness = 0 if screen_asleep else v
     except Exception:  # noqa: BLE001
         pass
 
@@ -5495,7 +5511,7 @@ def home(request: Request):
                 '<p><button style="padding:10px 18px">Send to board</button></p></form>')
         body = PAGE % ("Status: " + kite_status, link + form)
     body = body.replace("</body>", '<p style="margin-top:32px"><a href="/todo">To-do list</a> '
-                        '<a href="/stocks">My stocks</a> <a href="/ask">Ask AI</a> <a href="/anim">Animations</a> <a href="/settings">Settings</a></p>'
+                        '<a href="/stocks">My stocks</a> <a href="/ask">Ask AI</a> <a href="/anim">Animations</a> <a href="/presence">Presence</a> <a href="/settings">Settings</a></p>'
                         '<p style="margin-top:16px"><a href="/cricket" '
                         'style="background:#444">Cricket matches</a></p>'
                         '<p style="margin-top:16px"><a href="/rotate?on=%d" style="background:#444">'
@@ -5761,6 +5777,22 @@ def settings_html(msg=""):
                   ck("BUZZER"), ck("BUZZ_SL"), ck("BUZZ_TGT"), ck("BUZZ_WICKET"), ck("BUZZ_KITE"),
                   ck("BUZZ_NIGHT", "off"), esc(str(cfg("BUZZER_PIN") or "1")),
                   " &nbsp; ".join('<a href="/settings/buzz?s=%s">%s</a>' % (k, n) for k, n in SOUND_LABELS)))
+    out.append('<h3 id=presence>Presence sensor</h3>'
+               '<label><input type=checkbox name=PRESENCE value=on%s>Use the presence sensor</label>'
+               '<label>Turn the screen off after <input type=number name=AWAY_MINUTES min=0 max=240 value=%s> '
+               'minutes with nobody there <small>(0 = never)</small></label>'
+               '<label>Break reminder every <input type=number name=BREAK_MINUTES min=0 max=600 value=%s> '
+               'minutes of sitting <small>(0 = off)</small></label>'
+               '<label><input type=checkbox name=PRES_GREET value=on%s>Pet says hello when you come back</label>'
+               '<label><input type=checkbox name=BUZZ_BREAK value=on%s>Beep for the break reminder</label>'
+               '<label><input type=checkbox name=BUZZ_AWAY value=on%s>No beeps while you\'re away</label>'
+               '<label>OT2 pin: GPIO <input type=text name=PRES_PIN value="%s" style="width:50px"> '
+               'TX pin: GPIO <input type=text name=PRES_UART value="%s" style="width:50px"> '
+               '<small>(restart; "off" for none)</small></label>'
+               '<p><a href="/presence">Live sensor test</a></p>'
+               % (ck("PRESENCE"), esc(str(cfg("AWAY_MINUTES") or "5")), esc(str(cfg("BREAK_MINUTES") or "60")),
+                  ck("PRES_GREET"), ck("BUZZ_BREAK"), ck("BUZZ_AWAY"),
+                  esc(str(cfg("PRES_PIN") or "16")), esc(str(cfg("PRES_UART") or "44"))))
     out.append('<h3>Other</h3>'
                '<label>Pet name <input type=text name=PET_NAME value="%s" maxlength=10> <small>(restart)</small></label>'
                '<label>Internet screen pings <input type=text name=PING_HOST value="%s" style="width:140px"></label>'
@@ -5854,8 +5886,18 @@ def settings_save(request: Request):
         CFG["TRIVIA_SOURCE"] = g("TRIVIA_SOURCE")
     if g("STAT_CLASS") in ("1", "2", "3", "11"):
         CFG["STAT_CLASS"] = g("STAT_CLASS")
-    for k in ("BUZZER", "BUZZ_SL", "BUZZ_TGT", "BUZZ_WICKET", "BUZZ_KITE", "BUZZ_NIGHT"):
+    for k in ("BUZZER", "BUZZ_SL", "BUZZ_TGT", "BUZZ_WICKET", "BUZZ_KITE", "BUZZ_NIGHT",
+              "PRESENCE", "PRES_GREET", "BUZZ_BREAK", "BUZZ_AWAY"):
         CFG[k] = "on" if g(k) else "off"
+    CFG["AWAY_MINUTES"] = str(_num(g("AWAY_MINUTES"), 0, 240, 5))
+    CFG["BREAK_MINUTES"] = str(_num(g("BREAK_MINUTES"), 0, 600, 60))
+    pres_pins = []
+    for k, d in (("PRES_PIN", "16"), ("PRES_UART", "44")):
+        v = (g(k) or d).lower()
+        if (v.isdigit() and int(v) < 49) or v == "off":
+            if v != str(cfg(k) or d):
+                pres_pins.append(k)
+            CFG[k] = v
     pin = (g("BUZZER_PIN") or "1").lower()
     if (pin.isdigit() and int(pin) < 49) or pin == "off":
         if pin != str(cfg("BUZZER_PIN") or "1"):
@@ -5878,7 +5920,7 @@ def settings_save(request: Request):
     # what only takes effect after a restart
     now_vals = {"WEATHER_TOWN": TOWN, "WEATHER_LAT": LAT, "WEATHER_LON": LON, "TRIVIA_SOURCE": TRIVIA_SOURCE,
                 "PET_NAME": PET_NAME, "NEWS_COUNT": str(NEWS_COUNT)}
-    restart = [k for k in RESTART_KEYS if str(CFG.get(k, now_vals[k])) != str(now_vals[k])]
+    restart = [k for k in RESTART_KEYS if str(CFG.get(k, now_vals[k])) != str(now_vals[k])] + restart + pres_pins
     theme = g("THEME")
     if theme in THEMES and theme != THEME:
         try:
@@ -6072,6 +6114,76 @@ def todo_do(request: Request):
     except Exception as e:  # noqa: BLE001
         return _page(request, todo_html("Couldn't save: %s" % esc(str(e))))
     return _page(request, '<!doctype html><meta http-equiv="refresh" content="0;url=/todo">')
+
+
+# ------------------------------------------------------------- Presence sensor page
+PRES_PAGE = """<!doctype html><html><head><meta name=viewport content="width=device-width">
+<title>Presence sensor</title><style>
+body{font-family:sans-serif;background:#111;color:#ddd;padding:16px;max-width:560px;margin:auto}
+a{color:#8ab4f8}#big{font-size:44px;font-weight:bold;margin:10px 0;padding:18px;border-radius:12px;text-align:center}
+table{border-collapse:collapse;width:100%%}td{padding:7px 4px;border-bottom:1px solid #222}td:first-child{color:#999;width:45%%}
+pre{background:#1a1a1a;padding:10px;border-radius:8px;font-size:13px;white-space:pre-wrap;min-height:60px}
+.note{background:#2a2a14;border-left:4px solid #e0b020;padding:10px;margin:10px 0;font-size:14px}
+</style></head><body><h2>Presence sensor</h2>
+<div id=big style="background:#333">...</div>
+<table>
+<tr><td>OT2 pin (GPIO %s)</td><td id=pin>-</td></tr>
+<tr><td>Serial text says</td><td id=said>-</td></tr>
+<tr><td>Distance</td><td id=dist>-</td></tr>
+<tr><td>Serial bytes received</td><td id=bytes>-</td></tr>
+<tr><td>Changed</td><td id=chg>-</td></tr>
+<tr><td>Screen</td><td id=scr>-</td></tr>
+<tr><td>At the desk today</td><td id=desk>-</td></tr>
+<tr><td>This sitting</td><td id=sit>-</td></tr>
+</table>
+<p>Last lines from the sensor (GPIO %s):</p><pre id=lines></pre>
+<div class=note id=help></div>
+<p><a href="/settings#presence">Presence settings</a> &nbsp; <a href="/">Back</a></p>
+<script>
+function ago(s){s=Math.round(s);return s<90?s+"s ago":Math.round(s/60)+" min ago"}
+function hm(s){var m=Math.floor(s/60);return m>=60?Math.floor(m/60)+"h "+(m%%60)+"m":m+" min"}
+function tick(){fetch("/presence.json").then(function(r){return r.json()}).then(function(d){
+ var b=document.getElementById("big");
+ b.textContent=d.here?"SOMEONE THERE":"NOBODY";b.style.background=d.here?"#1e7a3e":"#5a2a2a";
+ pin.textContent=d.pin===null?"not set up":(d.pin?"HIGH (someone there)":"LOW (nobody)");
+ said.textContent=d.said===null?"nothing yet":(d.said?"ON":"OFF");
+ dist.textContent=d.dist===null?"-":d.dist+" cm";
+ bytes.textContent=d.bytes;chg.textContent=ago(d.changed);
+ scr.textContent=!d.on?"presence switched off in Settings":(d.asleep?"OFF (nobody here)":
+  (d.off_in===null?"on":"on - turns off in "+hm(d.off_in)));
+ desk.textContent=hm(d.desk);sit.textContent=d.sitting===null?"-":hm(d.sitting);
+ lines.textContent=d.lines.join("\\n")||"(nothing received)";
+ var h=[];
+ if(d.err)h.push("Problem: "+d.err);
+ if(d.pin===false&&!d.seen)h.push("OT2 has never gone high. Sit in front of the sensor with the gold antennas facing you. Still nothing: check the purple wire is on the 5th pin of the left header (GPIO 16) and the yellow wire on the 1st (3V).");
+ if(d.bytes==0)h.push("No serial data yet. That's fine for presence (OT2 does the work). For distance, check the blue wire: sensor TX to the 9th pin (GPIO 44).");
+ if(d.seen&&d.bytes>0)h.push("Sensor working. Walk away and the board's screen turns off after the away time in Settings.");
+ help.innerHTML=h.join("<br><br>");
+}).catch(function(){}).then(function(){setTimeout(tick,700)})}
+tick();
+</script></body></html>"""
+
+
+@server.route("/presence")
+def presence_page(request: Request):
+    return Response(request, PRES_PAGE % (esc(str(cfg("PRES_PIN") or "16")), esc(str(cfg("PRES_UART") or "44"))),
+                    content_type="text/html")
+
+
+@server.route("/presence.json")
+def presence_json(request: Request):
+    now = time.monotonic()
+    idle = now - max(pres_last_here, pres_poke)
+    off_in = None
+    if pres_on() and pres_seen and away_secs() and not pres_here and not screen_asleep:
+        off_in = max(0, away_secs() - idle)
+    d = {"here": bool(pres_here), "pin": pres_level, "said": pres_said, "dist": pres_dist,
+         "bytes": pres_bytes, "changed": now - pres_changed, "asleep": screen_asleep,
+         "on": pres_on(), "seen": pres_seen, "off_in": off_in, "desk": desk_secs,
+         "sitting": None if pres_session is None else now - pres_session, "err": pres_err,
+         "lines": ["%s ago  %s%s" % (_ago(now - t_), ln, "  (x%d)" % n if n > 1 else "")
+                   for t_, ln, n in pres_lines]}
+    return Response(request, json.dumps(d), content_type="application/json")
 
 
 # ------------------------------------------------------------- Animations page
@@ -6680,10 +6792,11 @@ SOUNDS = {
     "sl": ((1760, 180), (0, 50), (1175, 180), (0, 50), (784, 380), (0, 150),
            (1760, 180), (0, 50), (1175, 180), (0, 50), (784, 380)),
     "chime": ((1319, 160), (0, 40), (988, 260)),
+    "break": ((880, 120), (0, 60), (1175, 120), (0, 60), (1568, 240)),
     "test": ((2000, 150),),
 }
 SOUND_LABELS = (("target", "Target hit"), ("sl", "Stop-loss hit"), ("wicket", "Wicket siren"),
-                ("chime", "Kite login expired"))
+                ("chime", "Kite login expired"), ("break", "Break reminder"))
 
 
 def buzz_on(key):
@@ -6709,7 +6822,8 @@ def beep(name, force=False):
     if buzzer is None:
         return
     if not force and (not buzz_on("BUZZER") or
-                      (is_night(time.localtime()) and (cfg("BUZZ_NIGHT") or "off") != "on")):
+                      (is_night(time.localtime()) and (cfg("BUZZ_NIGHT") or "off") != "on") or
+                      (buzz_on("BUZZ_AWAY") and pres_away())):
         return
     try:
         if name == "wicket":                     # siren: two up-and-down sweeps
@@ -6735,6 +6849,206 @@ def beep(name, force=False):
 
 
 buzzer_init()
+
+
+# ------------------------------------------------------------- presence (mmWave radar)
+# Waveshare HMMD mmWave sensor (24 GHz, S3KM1110). Wiring, LilyGO left header counted from
+# the USB end:  3V3 -> pin 1 (3V), GND -> pin 2 (G), OT2 -> pin 5 (GPIO 16),
+#               TX -> pin 9 (GPIO 44), RX -> pin 10 (GPIO 43, not used yet).
+# OT2 is high while someone is there. TX sends ON/OFF and "Range <cm>" text at 115200 baud.
+# The screen turns off after AWAY_MINUTES with nobody there and comes back when you sit down;
+# the pet says hello, the clock shows today's desk time and a beep suggests a break.
+# Live test page: http://<board>:8080/presence
+pres_io = None
+pres_uart = None
+pres_err = ""
+pres_level = None            # OT2 pin right now
+pres_said = None             # what the serial text last said: True (ON) / False (OFF)
+pres_dist = None             # cm, from "Range" lines
+pres_lines = []              # last few lines from the sensor (for the test page)
+pres_buf = b""
+pres_bytes = 0
+pres_seen = False            # the sensor has reported someone at least once: trust it
+pres_here = False
+pres_last_here = -1e9        # monotonic: last time someone was there
+pres_poke = -1e9             # a button press also keeps the screen on
+pres_changed = time.monotonic()
+pres_session = None          # monotonic: start of this sitting
+pres_nudged = 0              # break reminders given this sitting
+desk_secs = 0.0
+desk_day = -1
+pres_tick_at = time.monotonic()
+
+
+def pres_on():
+    return (cfg("PRESENCE") or "on") != "off"
+
+
+def away_secs():
+    return 60 * _num(cfg("AWAY_MINUTES") or "5", 0, 240, 5)
+
+
+def pres_away():
+    """True when the sensor works and nobody has been there for a minute or more."""
+    return pres_on() and pres_seen and not pres_here and time.monotonic() - pres_last_here > 60
+
+
+def presence_init():
+    global pres_io, pres_uart, pres_err
+    pin_no = str(cfg("PRES_PIN") or "16").strip().lower()
+    if pin_no not in ("", "off", "none", "no"):
+        try:
+            pres_io = digitalio.DigitalInOut(getattr(microcontroller.pin, "GPIO" + pin_no))
+            pres_io.switch_to_input(pull=digitalio.Pull.DOWN)   # unplugged reads as nobody there
+        except Exception as e:  # noqa: BLE001
+            pres_err = "OT2 on GPIO%s: %r" % (pin_no, e)
+            log_err("presence " + pres_err)
+    rx_no = str(cfg("PRES_UART") or "44").strip().lower()
+    if rx_no not in ("", "off", "none", "no"):
+        try:
+            import busio
+            pres_uart = busio.UART(None, getattr(microcontroller.pin, "GPIO" + rx_no), baudrate=115200,
+                                   timeout=0, receiver_buffer_size=512)
+        except Exception as e:  # noqa: BLE001
+            pres_err = (pres_err + "; " if pres_err else "") + "TX on GPIO%s: %r" % (rx_no, e)
+            log_err("presence serial: %r" % (e,))
+
+
+def _pres_line(raw):
+    """One line of the sensor's text output."""
+    global pres_said, pres_dist
+    if all(32 <= b < 127 or b == 9 for b in raw):
+        line = raw.decode().strip()
+    else:                                    # not text (report mode): show it as hex
+        line = " ".join("%02X" % b for b in raw[:24])
+    if not line:
+        return
+    up = line.upper()
+    if up == "ON":
+        pres_said = True
+    elif up == "OFF":
+        pres_said = False
+        pres_dist = None
+    elif up.startswith("RANGE"):
+        try:
+            pres_dist = int(up.split()[-1])
+        except (ValueError, IndexError):
+            pass
+    if pres_lines and pres_lines[-1][1] == line:          # repeats: just count them
+        pres_lines[-1][2] += 1
+    else:
+        pres_lines.append([time.monotonic(), line, 1])
+        del pres_lines[:-10]
+
+
+def pres_read():
+    global pres_buf, pres_bytes, pres_said, pres_dist
+    if pres_uart is None:
+        return
+    try:
+        n = pres_uart.in_waiting
+        data = pres_uart.read(min(n, 512)) if n else None
+    except Exception as e:  # noqa: BLE001
+        log_err("presence read: %r" % (e,))
+        return
+    if not data:
+        return
+    pres_bytes += len(data)
+    pres_buf += data
+    # report mode (binary frames F4 F3 F2 F1 ... 08 07 06 05): presence byte + distance
+    i = pres_buf.find(b"\xf4\xf3\xf2\xf1")
+    if i >= 0 and len(pres_buf) >= i + 9:
+        pres_said = pres_buf[i + 6] == 1
+        pres_dist = pres_buf[i + 7] | (pres_buf[i + 8] << 8)
+    while b"\n" in pres_buf:
+        raw, pres_buf = pres_buf.split(b"\n", 1)
+        _pres_line(raw.strip(b"\r"))
+    if len(pres_buf) > 200:                               # no line breaks: binary output
+        _pres_line(pres_buf[-24:])
+        pres_buf = b""
+
+
+def pres_wake(now):
+    global screen_asleep
+    if screen_asleep:
+        screen_asleep = False
+        set_brightness(want_bright)
+
+
+def pres_tick(now):
+    """Every pass of the main loop: read the sensor, count desk time, sleep or wake the screen."""
+    global pres_level, pres_seen, pres_here, pres_last_here, pres_changed, pres_session, \
+        pres_nudged, desk_secs, desk_day, pres_tick_at, screen_asleep, force_show
+    pres_read()
+    if pres_io is not None:
+        try:
+            pres_level = pres_io.value
+        except Exception:  # noqa: BLE001
+            pres_level = None
+    here = pres_level if pres_level is not None else bool(pres_said)
+    if here or pres_said:
+        pres_seen = True
+    dt = min(30.0, max(0.0, now - pres_tick_at))
+    pres_tick_at = now
+    t = time.localtime()
+    if t.tm_yday != desk_day:                 # new day: desk time starts again
+        desk_day, desk_secs = t.tm_yday, 0.0
+    if here:
+        desk_secs += dt
+    if not pres_on():
+        pres_here = here
+        pres_wake(now)
+        return
+    if here != pres_here:
+        pres_here = here
+        pres_changed = now
+        if here:
+            gone = now - pres_last_here
+            if gone > 180 or pres_session is None:            # a new sitting
+                pres_session, pres_nudged = now, 0
+            pres_wake(now)
+            pet = EXTRA.get("pet")
+            if pet and gone > max(180, away_secs()) and gone < 1e8 and not night_now and \
+                    (cfg("PRES_GREET") or "on") != "off" and "pet" in ORDER and not play_name:
+                pet.greet_msg = ("Woof! You're back! You were away %s. *wag wag*" % dur_text(gone))
+                pet.greet_until = now + 20
+                force_show = "pet"
+    if here:
+        pres_last_here = now
+    # sleep the screen once nobody has been there for AWAY_MINUTES (0 = never)
+    idle = now - max(pres_last_here, pres_poke)
+    if pres_seen and away_secs() and not here and idle > away_secs() and not screen_asleep:
+        screen_asleep = True
+        set_brightness(want_bright)
+    # stretch break: every BREAK_MINUTES of one sitting (a few minutes away ends the sitting)
+    brk = 60 * _num(cfg("BREAK_MINUTES") or "60", 0, 600, 60)
+    if pres_session is not None and now - pres_last_here > 180:
+        pres_session = None
+    if brk and pres_session is not None and here and not night_now and \
+            now - pres_session >= brk * (pres_nudged + 1):
+        pres_nudged += 1
+        pet = EXTRA.get("pet")
+        if pet and "pet" in ORDER and not play_name:
+            pet.greet_msg = "You've been at the desk %s. Stretch break? *paw*" % dur_text(now - pres_session)
+            pet.greet_until = now + 30
+            force_show = "pet"
+        if buzz_on("BUZZ_BREAK"):
+            beep("break")
+
+
+def dur_text(s):
+    m = int(s // 60)
+    return "%dh %02dm" % (m // 60, m % 60) if m >= 60 else "%d min" % max(1, m)
+
+
+def desk_text():
+    if not (pres_on() and pres_seen):
+        return ""
+    m = int(desk_secs // 60)
+    return "AT DESK %dH %02dM" % (m // 60, m % 60)
+
+
+presence_init()
 
 
 # ------------------------------------------------------------- start-up
@@ -6888,6 +7202,10 @@ while True:
                 break
 
         t = time.localtime()
+        try:
+            pres_tick(now_m)                 # presence sensor: desk time, screen off when away
+        except Exception as e:  # noqa: BLE001
+            log_err("presence: %r" % (e,))
 
         # night mode: dark, dim clock only (a button press wakes other screens for 60 s)
         night = is_night(t)
@@ -6908,6 +7226,12 @@ while True:
         pressed = not button.value
         switch = pressed and btn_was
         btn_was = not pressed
+        if pressed or (boot is not None and not boot.value):
+            pres_poke = now_m                # a button press keeps the screen on too
+            if screen_asleep:                # ...and the first press only wakes it
+                pres_wake(now_m)
+                switch = False
+                boot_was = False
         if switch:
             wake_until = now_m + 60
         if force_show:                       # "show" on the Settings page, or a screen turned off

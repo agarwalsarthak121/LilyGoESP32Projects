@@ -315,7 +315,7 @@ class Response:
     def __init__(self, req, body, content_type=None): self.body = body
 hs.Server, hs.Request, hs.Response = Server, Request, Response
 sys.modules["adafruit_httpserver"] = hs
-mc = types.ModuleType("microcontroller"); mc.pin = types.SimpleNamespace(GPIO14="GPIO14", GPIO0="GPIO0", GPIO1="GPIO1", GPIO2="GPIO2")
+mc = types.ModuleType("microcontroller"); mc.pin = types.SimpleNamespace(**{"GPIO%d" % i: "GPIO%d" % i for i in range(49)})
 pwm = types.ModuleType("pwmio")
 class _PWM:
     log = []                          # (frequency, duty) whenever the buzzer changes
@@ -356,10 +356,25 @@ mc.reset = _reset
 sys.modules["microcontroller"] = mc
 dio = types.ModuleType("digitalio")
 class DIO:
-    def __init__(self, p): self.value = True
+    levels = {"GPIO16": os.environ.get("PRES_LEVEL", "0") == "1"}   # presence sensor OT2
+    def __init__(self, p): self.pin = p
+    @property
+    def value(self): return DIO.levels.get(self.pin, True)
     def switch_to_input(self, pull=None): pass
-dio.DigitalInOut = DIO; dio.Pull = types.SimpleNamespace(UP=1)
+dio.DigitalInOut = DIO; dio.Pull = types.SimpleNamespace(UP=1, DOWN=2)
 sys.modules["digitalio"] = dio
+bio = types.ModuleType("busio")
+class _UART:
+    feed = bytearray(os.environ.get("PRES_FEED", "").replace("|", "\r\n").encode())
+    def __init__(self, tx, rx, baudrate=9600, timeout=1, receiver_buffer_size=64):
+        if os.environ.get("NO_UART"): raise ValueError("pin in use")
+        print("UART rx", rx, baudrate)
+    @property
+    def in_waiting(self): return len(_UART.feed)
+    def read(self, n):
+        d = bytes(_UART.feed[:n]); del _UART.feed[:n]; return d or None
+bio.UART = _UART
+sys.modules["busio"] = bio
 os.environ.setdefault("SCREEN_SECONDS", "0")
 sys.modules["adafruit_requests"] = rq
 
