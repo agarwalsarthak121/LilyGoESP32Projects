@@ -5952,8 +5952,7 @@ def settings_save(request: Request):
         return _page(request, settings_html("Couldn't save: %s" % esc(repr(e))))
     apply_cfg()
     if (str(cfg("PRES_MAX_M") or ""), str(cfg("PRES_MIN_M") or ""), str(cfg("PRES_DELAY") or "")) != radar_was:
-        radar_config()
-        notes.append("Presence sensor: %s." % esc(pres_cfg_msg))
+        notes.append("Presence sensor range/delay saved, but not sent - tap Send on the presence page.")
     if g("go") == "restart":
         reboot_at = time.monotonic() + 2
         notes.append("Saved. The board restarts in a few seconds - reload this page in about 20 seconds.")
@@ -6167,8 +6166,10 @@ pre{background:#1a1a1a;padding:10px;border-radius:8px;font-size:13px;white-space
 <br>Ignore anything closer than:
 <a href="/presence/range?n=0">0 m</a> &nbsp; <a href="/presence/range?n=0.7">0.7 m</a> &nbsp;
 <a href="/presence/range?n=1.4">1.4 m</a><br>
-<a href="/presence/range">Send the settings to the sensor again</a> &nbsp;
-<a href="/presence/unstick">Sensor gone quiet? Unstick it</a><br>
+<a href="/presence/range?send=1">Send these settings to the sensor</a>
+<small>(experimental: so far this has left the sensor silent until the USB is unplugged)</small><br>
+<a href="/presence/unstick">Sensor gone quiet? Unstick it</a> &nbsp;
+<a href="/presence/hello">Test the white wire</a><br>
 <small>Your chair should sit between the two. Something right next to the sensor (a charger, cables)
 that keeps it saying "someone there": ignore the first 0.7 m and put the sensor 1 m or more from your seat.</small></p>
 <p><a href="/presence/scan">Find the sensor wires (pin scan)</a></p>
@@ -6264,7 +6265,11 @@ def presence_range(request: Request):
         save_cfg()
     except Exception as e:  # noqa: BLE001
         log_err("presence range save: %r" % (e,))
-    radar_config()
+    global pres_cfg_msg
+    if q.get("send", safe=False) == "1":
+        radar_config()
+    else:
+        pres_cfg_msg = "saved, not sent yet"
     return Response(request, '<!doctype html><meta http-equiv="refresh" content="0;url=/presence">',
                     content_type="text/html")
 
@@ -6273,6 +6278,14 @@ def presence_range(request: Request):
 def presence_unstick(request: Request):
     global pres_cfg_msg
     pres_cfg_msg = radar_unstick()
+    return Response(request, '<!doctype html><meta http-equiv="refresh" content="0;url=/presence">',
+                    content_type="text/html")
+
+
+@server.route("/presence/hello")
+def presence_hello(request: Request):
+    global pres_cfg_msg
+    pres_cfg_msg = radar_hello()
     return Response(request, '<!doctype html><meta http-equiv="refresh" content="0;url=/presence">',
                     content_type="text/html")
 
@@ -7191,6 +7204,41 @@ def _radar_talking(secs):
     return False
 
 
+def radar_hello():
+    """Harmless check of the white wire: ask for the firmware version (command 0x0000, no
+    configuration mode needed) and report exactly what comes back."""
+    if pres_uart is None or not getattr(pres_uart, "write", None):
+        return "can't test: no serial connection"
+    try:
+        n = pres_uart.in_waiting                       # drop text already waiting
+        if n:
+            pres_uart.read(n)
+        pres_uart.write(_radar_frame(0x0000))
+        got = b""
+        t_end = time.monotonic() + 1.0
+        while time.monotonic() < t_end:
+            n = pres_uart.in_waiting
+            if n:
+                got += pres_uart.read(n)
+            time.sleep(0.02)
+        i = got.find(b"\xfd\xfc\xfb\xfa\x0c\x00\x00\x01")
+        if i < 0:
+            i = got.find(b"\xfd\xfc\xfb\xfa")
+        if i >= 0:
+            frame = got[i:i + 24]
+            ver = ""
+            if frame[6:8] == b"\x00\x01" and len(frame) > 12:
+                n = frame[10] | (frame[11] << 8)
+                ver = frame[12:12 + n].decode("ascii", "replace")
+            return ("white wire works: sensor answered%s (%s)" %
+                    (" with firmware " + ver if ver else "", " ".join("%02X" % b for b in frame)))
+        text = got.replace(b"\r", b"").replace(b"\n", b" ")[:40]
+        return ("no answer to the version request - the sensor isn't hearing the board "
+                "(white wire / GPIO 43). Got %d bytes of normal text: %s" % (len(got), text))
+    except Exception as e:  # noqa: BLE001
+        return "test failed: %r" % (e,)
+
+
 def radar_unstick():
     """A sensor that stopped talking is stuck in configuration mode: close it, and if that
     doesn't help, restart the sensor (command 0x0068). Returns what happened."""
@@ -7349,10 +7397,9 @@ def desk_text():
 
 
 presence_init()
-if pres_uart is not None and getattr(pres_uart, "write", None) and str(cfg("PRES_TX") or "43") != "off" \
-        and not _radar_talking(2):               # left stuck by an earlier restart: get it going again
-    log_err("presence sensor silent at start: " + radar_unstick())
-radar_config()
+# Nothing is sent to the sensor at start-up: on this sensor, configuration commands leave it silent
+# until it loses power. Settings are only sent from the /presence page, on request.
+pres_cfg_msg = "nothing sent (settings are only sent when you tap Send on this page)"
 
 
 # ------------------------------------------------------------- start-up

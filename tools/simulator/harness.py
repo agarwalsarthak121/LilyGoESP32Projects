@@ -385,6 +385,9 @@ class _UART:
                 _UART.config = True
             elif c == 0x68 or (c == 0xFE and not os.environ.get("STUCK_CLOSE")):
                 _UART.config = False
+        if b[:4] == b"\xfd\xfc\xfb\xfa" and b[6:8] == b"\x00\x00" and not os.environ.get("NO_ACK"):
+            _UART.feed += bytes.fromhex("FDFCFBFA0C000001000006007631 2E352E3504030201".replace(" ", ""))
+            return len(b)
         if b[:4] == b"\xfd\xfc\xfb\xfa" and not os.environ.get("NO_ACK"):
             cmd = b[6:8]
             _UART.feed += b"\xfd\xfc\xfb\xfa\x04\x00" + bytes([cmd[0], 1]) + b"\x00\x00\x04\x03\x02\x01"
