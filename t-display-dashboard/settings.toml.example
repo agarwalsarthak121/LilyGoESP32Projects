@@ -46,6 +46,8 @@ FMP_API_KEY = ""
 # --- Screens and rotation ---
 # GEMINI_API_KEY = ""         # for the Ask AI screen: a key from Google AI Studio (aistudio.google.com)
 # GEMINI_MODEL = "gemini-flash-latest"
+# BUZZER_PIN = "1"            # passive buzzer I/O pin (VCC -> 3V, GND -> G); "off" for none
+# BUZZER_ACTIVE = "low"       # "low" for MH-FMD "low level triggered" modules, else "high"
 # NTFY_TOPIC = ""             # ntfy topic for stop-loss/target alerts on My stocks (or set it at /stocks)
 # SCREEN_ORDER = "weather,ask,todo,portfolio,stocks,heatmap,markets,cricket,stat,news,trivia,net,pet"
 #                             # also available: clock, matrix, fire, stars, plasma, fireworks, mystify, pipes, life, bounce

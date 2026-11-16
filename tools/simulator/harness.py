@@ -315,7 +315,24 @@ class Response:
     def __init__(self, req, body, content_type=None): self.body = body
 hs.Server, hs.Request, hs.Response = Server, Request, Response
 sys.modules["adafruit_httpserver"] = hs
-mc = types.ModuleType("microcontroller"); mc.pin = types.SimpleNamespace(GPIO14="GPIO14", GPIO0="GPIO0")
+mc = types.ModuleType("microcontroller"); mc.pin = types.SimpleNamespace(GPIO14="GPIO14", GPIO0="GPIO0", GPIO1="GPIO1", GPIO2="GPIO2")
+pwm = types.ModuleType("pwmio")
+class _PWM:
+    log = []                          # (frequency, duty) whenever the buzzer changes
+    def __init__(self, pin, frequency=500, duty_cycle=0, variable_frequency=False):
+        self.pin, self._f, self._d = pin, frequency, duty_cycle
+        print("PWM", pin, "idle duty", duty_cycle)
+    @property
+    def frequency(self): return self._f
+    @frequency.setter
+    def frequency(self, f): self._f = f
+    @property
+    def duty_cycle(self): return self._d
+    @duty_cycle.setter
+    def duty_cycle(self, d):
+        self._d = d; _PWM.log.append((self._f, d))
+pwm.PWMOut = _PWM
+sys.modules["pwmio"] = pwm
 mc.nvm = bytearray(b"\xff" * 8192)
 NVMFILE = os.environ.get("NVMFILE")
 if NVMFILE and os.path.exists(NVMFILE):

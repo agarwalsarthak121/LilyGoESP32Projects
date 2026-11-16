@@ -2863,6 +2863,7 @@ def check_alerts(rows):
         return
     now = time.monotonic()
     changed = False
+    sounds = []
     for r in rows:
         a = alerts.get(r[0])
         if not a or a[2]:
@@ -2894,12 +2895,17 @@ def check_alerts(rows):
         t = time.localtime()
         a[2] = [kind, ltp, "%d %s %02d:%02d" % (t.tm_mday, MONTHS[t.tm_mon - 1], t.tm_hour, t.tm_min)]
         changed = True
+        sounds.append(kind)
     if changed:
         stocks_screen.dirty = True
         try:
             save_cfg()
         except Exception as e:  # noqa: BLE001
             log_err("saving alerts failed: %r" % (e,))
+    if "sl" in sounds and buzz_on("BUZZ_SL"):        # one sound per kind, stop-loss first
+        beep("sl")
+    if "tgt" in sounds and buzz_on("BUZZ_TGT"):
+        beep("target")
 
 
 class StocksScreen(Screen):
@@ -4012,8 +4018,15 @@ def kite_load():
         return None
 
 
+kite_was_in = False         # logged in until now: a chime when the session runs out
+
+
 def show_login_needed(reason):
-    global kite_token, kite_status, port_day_pct, pos_cache
+    global kite_token, kite_status, port_day_pct, pos_cache, kite_was_in
+    if kite_was_in and buzz_on("BUZZ_KITE"):
+        kite_was_in = False
+        beep("chime")
+    kite_was_in = False
     kite_token = None
     kite_forget()
     port_day_pct = None
@@ -4121,6 +4134,8 @@ def get_portfolio():
     port_day_pct = day_pct
     heat_screen.update(heat_rows)
     stocks_screen.update(stock_rows + pos_rows)
+    global kite_was_in
+    kite_was_in = True
     check_alerts(stock_rows + pos_rows)
     lbl_day_pct.text = "%+.2f%%" % day_pct
     lbl_day_pct.color = lbl_day.color
@@ -4932,8 +4947,10 @@ def cb_parse(mid, head_txt, mini_txt):
         teams.append((t.get("id"), t.get("name") or "?", (t.get("shortName") or t.get("name") or "?")[:5].upper()))
     state = head.get("state") or (mini.get("matchScoreDetails") or {}).get("state") or ""
     inns = []
+    wkts = 0
     for s in (mini.get("matchScoreDetails") or {}).get("inningsScoreList") or []:
         w = s.get("wickets", 0) or 0
+        wkts += min(w, 10)
         txt = ("%s" % s.get("score", 0)) if w >= 10 else "%s/%s%s" % (s.get("score", 0), w,
                                                                      "d" if s.get("isDeclared") else "")
         inns.append((s.get("inningsId", 0), s.get("batTeamId"), txt, _cb_overs(s.get("overs"))))
@@ -4942,6 +4959,7 @@ def cb_parse(mid, head_txt, mini_txt):
     if not inns and bat is not None and (mini.get("batTeam") or {}).get("teamScore") is not None:
         bt = mini["batTeam"]
         w = bt.get("teamWkts", 0) or 0
+        wkts = min(w, 10)
         inns.append((mini.get("inningsId", 1), bat, ("%s" % bt["teamScore"]) if w >= 10 else
                      "%s/%s" % (bt["teamScore"], w), _cb_overs(mini.get("overs"))))
     striker = _cb_bat(mini.get("batsmanStriker"))
@@ -4961,11 +4979,12 @@ def cb_parse(mid, head_txt, mini_txt):
             "title": "%s v %s, %s" % (teams[0][1], teams[1][1], head.get("matchDescription") or ""),
             "format": (head.get("matchFormat") or "").upper(), "status": head.get("status") or mini.get("status") or "",
             "teams": teams, "inns": inns, "bat": bat, "batters": batters, "bowler": bowler,
-            "rates": "  ".join(rates), "recent": (mini.get("recentOvsStats") or "").strip(),
+            "rates": "  ".join(rates), "wkts": wkts, "recent": (mini.get("recentOvsStats") or "").strip(),
             "last": mini.get("lastWicket") or ""}
 
 
 cb_err = {}             # id -> why the last Cricbuzz read failed
+cric_wkts = {}          # id -> wickets fallen so far, for the wicket siren
 cb_src = {}             # id -> which of CB_MATCH_URLS last had its data
 
 
@@ -5000,6 +5019,11 @@ def cb_fetch(mid):
     if d:
         cric_items[mid] = d
         cric_debug["parsed"] = d
+        seen = cric_wkts.get(mid)                # wickets so far (the most ever seen: a glitch can't re-trigger)
+        cric_wkts[mid] = max(seen or 0, d["wkts"])
+        if seen is not None and d["wkts"] > seen and d["started"] and not d["matchEnded"] \
+                and buzz_on("BUZZ_WICKET"):
+            beep("wicket")
         if d["matchEnded"]:
             cric_gone.setdefault(mid, now)
         else:
@@ -5719,6 +5743,24 @@ def settings_html(msg=""):
                ' Longitude <input type=text name=WEATHER_LON value="%s" style="width:120px"></label>'
                '<small>Change the town and leave the numbers alone to look them up. Needs a restart.</small>'
                % (esc(TOWN), esc(LAT), esc(LON)))
+    ck = lambda k, d="on": " checked" if (cfg(k) or d) != "off" else ""  # noqa: E731
+    out.append('<h3>Sound</h3>%s'
+               '<label><input type=checkbox name=BUZZER value=on%s>Buzzer on</label>'
+               '<label><input type=checkbox name=BUZZ_SL value=on%s>Stop-loss hit</label>'
+               '<label><input type=checkbox name=BUZZ_TGT value=on%s>Target hit</label>'
+               '<label><input type=checkbox name=BUZZ_WICKET value=on%s>Wicket in a match you follow</label>'
+               '<label><input type=checkbox name=BUZZ_KITE value=on%s>Kite login expired</label>'
+               '<label><input type=checkbox name=BUZZ_NIGHT value=on%s>Also in night mode</label>'
+               '<label>Buzzer pin: GPIO <input type=text name=BUZZER_PIN value="%s" style="width:50px"> '
+               '<small>(restart; "off" for none)</small></label>'
+               '<p><small>Try: %s</small></p>'
+               % ("" if buzzer else ('<small>The buzzer pin is set to off.</small>' if
+                                     str(cfg("BUZZER_PIN") or "1").lower() == "off" else
+                                     '<small>Couldn\'t set up GPIO %s for the buzzer (see /debug).</small>'
+                                     % esc(str(cfg("BUZZER_PIN") or "1"))),
+                  ck("BUZZER"), ck("BUZZ_SL"), ck("BUZZ_TGT"), ck("BUZZ_WICKET"), ck("BUZZ_KITE"),
+                  ck("BUZZ_NIGHT", "off"), esc(str(cfg("BUZZER_PIN") or "1")),
+                  " &nbsp; ".join('<a href="/settings/buzz?s=%s">%s</a>' % (k, n) for k, n in SOUND_LABELS)))
     out.append('<h3>Other</h3>'
                '<label>Pet name <input type=text name=PET_NAME value="%s" maxlength=10> <small>(restart)</small></label>'
                '<label>Internet screen pings <input type=text name=PING_HOST value="%s" style="width:140px"></label>'
@@ -5740,6 +5782,13 @@ def _back(request, msg=""):
 @server.route("/settings")
 def settings_route(request: Request):
     return _page(request, settings_html())
+
+
+@server.route("/settings/buzz")
+def settings_buzz(request: Request):
+    s_ = request.query_params.get("s", safe=False) or "test"
+    beep(s_ if s_ in SOUNDS or s_ == "wicket" else "test", force=True)
+    return _back(request)
 
 
 @server.route("/settings/screen")
@@ -5805,6 +5854,13 @@ def settings_save(request: Request):
         CFG["TRIVIA_SOURCE"] = g("TRIVIA_SOURCE")
     if g("STAT_CLASS") in ("1", "2", "3", "11"):
         CFG["STAT_CLASS"] = g("STAT_CLASS")
+    for k in ("BUZZER", "BUZZ_SL", "BUZZ_TGT", "BUZZ_WICKET", "BUZZ_KITE", "BUZZ_NIGHT"):
+        CFG[k] = "on" if g(k) else "off"
+    pin = (g("BUZZER_PIN") or "1").lower()
+    if (pin.isdigit() and int(pin) < 49) or pin == "off":
+        if pin != str(cfg("BUZZER_PIN") or "1"):
+            restart.append("buzzer pin")
+        CFG["BUZZER_PIN"] = pin
     for k in ("CRICKET_TEAM", "STAT_PLAYERS", "PING_HOST"):
         if g(k) is not None:
             CFG[k] = g(k)
@@ -6609,6 +6665,77 @@ except Exception as e:  # noqa: BLE001 - pin busy on some builds
     print("BOOT button unavailable:", repr(e))
     boot = None
 boot_was = True
+
+# ------------------------------------------------------------- buzzer
+# A passive buzzer module (MH-FMD, "low level triggered") on BUZZER_PIN: GPIO 1 by default.
+# Wiring: VCC -> 3V (not 5V), GND -> G, I/O -> 1.  Its transistor conducts while the pin is LOW,
+# so the pin rests HIGH when silent. BUZZER_ACTIVE = "high" for modules that sound on HIGH.
+# Sounds: stop-loss / target hit, a wicket in a followed match, Kite login expired.
+# Quiet in night mode unless BUZZ_NIGHT is on; every sound can be switched off in Settings.
+buzzer = None
+BUZZ_LOW = (os.getenv("BUZZER_ACTIVE") or "low").strip().lower() != "high"
+BUZZ_IDLE = 65535 if BUZZ_LOW else 0          # silent: no current through the buzzer
+SOUNDS = {
+    "target": ((1047, 110), (1319, 110), (1568, 110), (2093, 340)),
+    "sl": ((1760, 180), (0, 50), (1175, 180), (0, 50), (784, 380), (0, 150),
+           (1760, 180), (0, 50), (1175, 180), (0, 50), (784, 380)),
+    "chime": ((1319, 160), (0, 40), (988, 260)),
+    "test": ((2000, 150),),
+}
+SOUND_LABELS = (("target", "Target hit"), ("sl", "Stop-loss hit"), ("wicket", "Wicket siren"),
+                ("chime", "Kite login expired"))
+
+
+def buzz_on(key):
+    """A Settings switch: on unless set to off."""
+    return (cfg(key) or "on") != "off"
+
+
+def buzzer_init():
+    global buzzer
+    pin_no = str(cfg("BUZZER_PIN") or "1").strip().lower()
+    if pin_no in ("", "off", "none", "no"):
+        return
+    try:
+        import pwmio
+        pin = getattr(microcontroller.pin, "GPIO" + pin_no)
+        buzzer = pwmio.PWMOut(pin, frequency=2000, duty_cycle=BUZZ_IDLE, variable_frequency=True)
+    except Exception as e:  # noqa: BLE001 - no buzzer, no sound
+        log_err("buzzer on GPIO%s: %r" % (pin_no, e))
+
+
+def beep(name, force=False):
+    """Play a sound now (blocks for up to ~2.5 s). Skipped when muted or at night, unless forced."""
+    if buzzer is None:
+        return
+    if not force and (not buzz_on("BUZZER") or
+                      (is_night(time.localtime()) and (cfg("BUZZ_NIGHT") or "off") != "on")):
+        return
+    try:
+        if name == "wicket":                     # siren: two up-and-down sweeps
+            for _ in range(2):
+                for f in list(range(600, 1900, 60)) + list(range(1900, 600, -60)):
+                    buzzer.frequency = f
+                    buzzer.duty_cycle = 32768
+                    time.sleep(0.022)
+                dog()
+        else:
+            for f, ms in SOUNDS.get(name, SOUNDS["test"]):
+                if f:
+                    buzzer.frequency = f
+                    buzzer.duty_cycle = 32768
+                else:
+                    buzzer.duty_cycle = BUZZ_IDLE
+                time.sleep(ms / 1000)
+            dog()
+    except Exception as e:  # noqa: BLE001
+        log_err("beep %s: %r" % (name, e))
+    finally:
+        buzzer.duty_cycle = BUZZ_IDLE
+
+
+buzzer_init()
+
 
 # ------------------------------------------------------------- start-up
 if ORDER[0] in EXTRA:            # draw the first screen now, so it isn't blank while data loads
