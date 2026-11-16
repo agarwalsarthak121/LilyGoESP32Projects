@@ -6167,7 +6167,8 @@ pre{background:#1a1a1a;padding:10px;border-radius:8px;font-size:13px;white-space
 <br>Ignore anything closer than:
 <a href="/presence/range?n=0">0 m</a> &nbsp; <a href="/presence/range?n=0.7">0.7 m</a> &nbsp;
 <a href="/presence/range?n=1.4">1.4 m</a><br>
-<a href="/presence/range">Send the settings to the sensor again</a><br>
+<a href="/presence/range">Send the settings to the sensor again</a> &nbsp;
+<a href="/presence/unstick">Sensor gone quiet? Unstick it</a><br>
 <small>Your chair should sit between the two. Something right next to the sensor (a charger, cables)
 that keeps it saying "someone there": ignore the first 0.7 m and put the sensor 1 m or more from your seat.</small></p>
 <p><a href="/presence/scan">Find the sensor wires (pin scan)</a></p>
@@ -6264,6 +6265,14 @@ def presence_range(request: Request):
     except Exception as e:  # noqa: BLE001
         log_err("presence range save: %r" % (e,))
     radar_config()
+    return Response(request, '<!doctype html><meta http-equiv="refresh" content="0;url=/presence">',
+                    content_type="text/html")
+
+
+@server.route("/presence/unstick")
+def presence_unstick(request: Request):
+    global pres_cfg_msg
+    pres_cfg_msg = radar_unstick()
     return Response(request, '<!doctype html><meta http-equiv="refresh" content="0;url=/presence">',
                     content_type="text/html")
 
@@ -7168,6 +7177,45 @@ def pres_min_m():
         return None
 
 
+def _radar_talking(secs):
+    """True when the sensor sends its normal ON / OFF / Range text within secs."""
+    got = b""
+    t_end = time.monotonic() + secs
+    while time.monotonic() < t_end:
+        n = pres_uart.in_waiting
+        if n:
+            got = (got + pres_uart.read(n))[-200:]
+            if b"ON" in got or b"OFF" in got or b"Range" in got:
+                return True
+        time.sleep(0.05)
+    return False
+
+
+def radar_unstick():
+    """A sensor that stopped talking is stuck in configuration mode: close it, and if that
+    doesn't help, restart the sensor (command 0x0068). Returns what happened."""
+    if pres_uart is None or not getattr(pres_uart, "write", None):
+        return "can't reach it: no serial connection"
+    try:
+        if _radar_talking(1.5):
+            return "sensor is talking normally"
+        for _ in range(2):
+            _radar_send(_radar_frame(0x00FE), b"\xfe\x01\x00\x00")
+        if _radar_talking(2):
+            return "sensor was stuck in configuration mode - closed it, talking again"
+        for ver in (1, 2):
+            if _radar_send(_radar_frame(0x00FF, struct.pack("<H", ver)), b"\xff\x01\x00\x00"):
+                break
+        _radar_send(_radar_frame(0x0068), b"\x68\x01\x00\x00")
+        if _radar_talking(4):
+            return "sensor was stuck - restarted it, talking again"
+        _radar_send(_radar_frame(0x00FE), b"\xfe\x01\x00\x00")
+        return "sensor is still silent - unplug the USB for 10 seconds"
+    except Exception as e:  # noqa: BLE001
+        log_err("presence unstick: %r" % (e,))
+        return "couldn't reach it: %r" % (e,)
+
+
 def radar_config():
     """Send the range and absence delay to the sensor."""
     global pres_cfg_msg
@@ -7210,6 +7258,8 @@ def radar_config():
                         % ("" if ok_open else " anything")) + ", ".join(what)
         if not ok_set:
             pres_cfg_msg += " | reply to 'open': %s | reply to 'set': %s" % (open_reply, pres_reply)
+        if not _radar_talking(2):                # make sure it went back to reporting
+            pres_cfg_msg += " | " + radar_unstick()
     except Exception as e:  # noqa: BLE001
         pres_cfg_msg = "couldn't send: %r" % (e,)
         log_err("presence config: %r" % (e,))
@@ -7299,6 +7349,9 @@ def desk_text():
 
 
 presence_init()
+if pres_uart is not None and getattr(pres_uart, "write", None) and str(cfg("PRES_TX") or "43") != "off" \
+        and not _radar_talking(2):               # left stuck by an earlier restart: get it going again
+    log_err("presence sensor silent at start: " + radar_unstick())
 radar_config()
 
 

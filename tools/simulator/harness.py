@@ -370,11 +370,21 @@ class _UART:
     def __init__(self, tx, rx, baudrate=9600, timeout=1, receiver_buffer_size=64):
         if os.environ.get("NO_UART"): raise ValueError("pin in use")
         print("UART rx", rx, baudrate)
+    config = False                    # FAKE_RADAR: the sensor stops talking in configuration mode
     @property
-    def in_waiting(self): return len(_UART.feed)
+    def in_waiting(self):
+        if os.environ.get("FAKE_RADAR") and not _UART.config and len(_UART.feed) < 40:
+            _UART.feed += b"ON\r\nRange 10\r\n"
+        return len(_UART.feed)
     sent = []
     def write(self, b):
         _UART.sent.append(bytes(b))
+        if b[:4] == b"\xfd\xfc\xfb\xfa":
+            c = b[6]
+            if c == 0xFF:
+                _UART.config = True
+            elif c == 0x68 or (c == 0xFE and not os.environ.get("STUCK_CLOSE")):
+                _UART.config = False
         if b[:4] == b"\xfd\xfc\xfb\xfa" and not os.environ.get("NO_ACK"):
             cmd = b[6:8]
             _UART.feed += b"\xfd\xfc\xfb\xfa\x04\x00" + bytes([cmd[0], 1]) + b"\x00\x00\x04\x03\x02\x01"
