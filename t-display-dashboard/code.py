@@ -2918,6 +2918,43 @@ def check_alerts(rows):
         beep("target")
 
 
+# ---- profit bell: the buzzer rings once when a stock in My stocks goes above PROFIT_BEEP rupees
+# of profit (default 1000). It rings again only after the profit has dropped below 90% of that,
+# so a P&L hovering around the line doesn't keep ringing. Stocks already above it when the board
+# starts don't ring.
+profit_over = {}             # key -> True once above the line (rung or already above at start)
+
+
+def profit_line():
+    v = str(cfg("PROFIT_BEEP") or "1000").strip().replace(",", "")
+    return int(v) if v.isdigit() and int(v) > 0 else None
+
+
+def check_profit(rows):
+    line = profit_line()
+    if not line or not rows:
+        return
+    picks = stock_picks()
+    rang = []
+    for r in rows:
+        key, sym, pnl = r[0], r[1], r[7]
+        if key.upper() not in picks or pnl is None:
+            continue
+        was = profit_over.get(key)
+        if pnl > line:
+            if was is False:                  # crossed the line since we last looked
+                rang.append(sym)
+            profit_over[key] = True
+        elif pnl < line * 0.9:
+            profit_over[key] = False          # far enough below: ready to ring again
+        elif was is None:
+            profit_over[key] = True           # first look, just under the line: don't ring yet
+    if rang:
+        log_err("profit above %d: %s" % (line, ", ".join(rang)))
+        if buzz_on("BUZZ_PROFIT"):
+            beep("profit")
+
+
 class StocksScreen(Screen):
     ROW_H = 47                      # three big rows a page
     F1, F2 = F_NEWS2, F_MED         # first and second line of a row
@@ -4153,6 +4190,7 @@ def get_portfolio():
     global kite_was_in
     kite_was_in = True
     check_alerts(stock_rows + pos_rows)
+    check_profit(stock_rows + pos_rows)
     lbl_day_pct.text = "%+.2f%%" % day_pct
     lbl_day_pct.color = lbl_day.color
     lbl_tot.text = inr(total, signed=True)
@@ -5764,6 +5802,8 @@ def settings_html(msg=""):
                '<label><input type=checkbox name=BUZZER value=on%s>Buzzer on</label>'
                '<label><input type=checkbox name=BUZZ_SL value=on%s>Stop-loss hit</label>'
                '<label><input type=checkbox name=BUZZ_TGT value=on%s>Target hit</label>'
+               '<label><input type=checkbox name=BUZZ_PROFIT value=on%s>A stock in My stocks goes above '
+               '&#8377;<input type=text name=PROFIT_BEEP value="%s" style="width:70px"> profit</label>'
                '<label><input type=checkbox name=BUZZ_WICKET value=on%s>Wicket in a match you follow</label>'
                '<label><input type=checkbox name=BUZZ_KITE value=on%s>Kite login expired</label>'
                '<label><input type=checkbox name=BUZZ_NIGHT value=on%s>Also in night mode</label>'
@@ -5774,7 +5814,8 @@ def settings_html(msg=""):
                                      str(cfg("BUZZER_PIN") or "1").lower() == "off" else
                                      '<small>Couldn\'t set up GPIO %s for the buzzer (see /debug).</small>'
                                      % esc(str(cfg("BUZZER_PIN") or "1"))),
-                  ck("BUZZER"), ck("BUZZ_SL"), ck("BUZZ_TGT"), ck("BUZZ_WICKET"), ck("BUZZ_KITE"),
+                  ck("BUZZER"), ck("BUZZ_SL"), ck("BUZZ_TGT"), ck("BUZZ_PROFIT"),
+                  esc(str(profit_line() or "")), ck("BUZZ_WICKET"), ck("BUZZ_KITE"),
                   ck("BUZZ_NIGHT", "off"), esc(str(cfg("BUZZER_PIN") or "1")),
                   " &nbsp; ".join('<a href="/settings/buzz?s=%s">%s</a>' % (k, n) for k, n in SOUND_LABELS)))
     out.append('<h3 id=presence>Presence sensor</h3>'
@@ -5905,7 +5946,9 @@ def settings_save(request: Request):
         CFG["TRIVIA_SOURCE"] = g("TRIVIA_SOURCE")
     if g("STAT_CLASS") in ("1", "2", "3", "11"):
         CFG["STAT_CLASS"] = g("STAT_CLASS")
-    for k in ("BUZZER", "BUZZ_SL", "BUZZ_TGT", "BUZZ_WICKET", "BUZZ_KITE", "BUZZ_NIGHT",
+    pb = (g("PROFIT_BEEP") or "").strip().replace(",", "")
+    CFG["PROFIT_BEEP"] = pb if pb.isdigit() and int(pb) > 0 else "off"
+    for k in ("BUZZER", "BUZZ_SL", "BUZZ_TGT", "BUZZ_PROFIT", "BUZZ_WICKET", "BUZZ_KITE", "BUZZ_NIGHT",
               "PRESENCE", "PRES_GREET", "BUZZ_BREAK", "BUZZ_AWAY"):
         CFG[k] = "on" if g(k) else "off"
     CFG["AWAY_MINUTES"] = str(_num(g("AWAY_MINUTES"), 0, 240, 5))
@@ -6961,10 +7004,11 @@ SOUNDS = {
            (1760, 180), (0, 50), (1175, 180), (0, 50), (784, 380)),
     "chime": ((1319, 160), (0, 40), (988, 260)),
     "break": ((880, 120), (0, 60), (1175, 120), (0, 60), (1568, 240)),
+    "profit": ((2637, 70), (0, 30), (2637, 70), (0, 30), (3136, 90), (0, 60), (2093, 90), (2637, 260)),
     "test": ((2000, 150),),
 }
 SOUND_LABELS = (("target", "Target hit"), ("sl", "Stop-loss hit"), ("wicket", "Wicket siren"),
-                ("chime", "Kite login expired"), ("break", "Break reminder"))
+                ("chime", "Kite login expired"), ("break", "Break reminder"), ("profit", "Profit bell"))
 
 
 def buzz_on(key):
