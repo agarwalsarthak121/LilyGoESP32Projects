@@ -86,7 +86,7 @@ The original grey look:
 
   ![Animations](docs/extra-animations.png)
 
-**Profit bell:** the buzzer rings once when a stock in My stocks goes above **₹1,000 profit** (Settings → Sound; change the amount or untick it). It rings again only after that stock's profit has dropped below 90% of the amount, so a P&L hovering around the line doesn't keep ringing, and stocks already above it when the board starts stay quiet. Target and stop-loss alerts are unchanged.
+**Profit bell:** the buzzer rings once when a stock in My stocks goes above **₹1,000 profit** (Settings → Sound; change the amount or untick it). It rings again only after that stock's profit has dropped below 90% of the amount, so a P&L hovering around the line doesn't keep ringing, and stocks already above it when the board starts stay quiet. It also sends an ntfy notification to your phone (untick *...and send a notification* to turn that off). Target and stop-loss alerts are unchanged.
 
 ## Presence sensor (optional)
 

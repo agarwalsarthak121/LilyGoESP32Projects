@@ -2923,6 +2923,7 @@ def check_alerts(rows):
 # so a P&L hovering around the line doesn't keep ringing. Stocks already above it when the board
 # starts don't ring.
 profit_over = {}             # key -> True once above the line (rung or already above at start)
+profit_pending = {}          # key -> (title, message) still to send through ntfy (retried each refresh)
 
 
 def profit_line():
@@ -2937,13 +2938,19 @@ def check_profit(rows):
     picks = stock_picks()
     rang = []
     for r in rows:
-        key, sym, pnl = r[0], r[1], r[7]
+        key, sym, prod, ltp, close, pnl, pnl_pct = r[0], r[1], r[2], r[5], r[6], r[7], r[8]
         if key.upper() not in picks or pnl is None:
             continue
         was = profit_over.get(key)
         if pnl > line:
             if was is False:                  # crossed the line since we last looked
                 rang.append(sym)
+                if (cfg("NTFY_PROFIT") or "on") != "off":
+                    profit_pending[key] = (
+                        "%s: profit above Rs %s" % (sym, group_in(line)),   # headers must be plain ASCII
+                        "%s%s is at %s. Your P&L %s (%+.1f%%). Today %+.2f%%." % (
+                            sym, (" (" + prod + ")") if prod else "", price(ltp), inr(pnl, signed=True),
+                            pnl_pct or 0.0, (ltp - close) / close * 100 if close and ltp else 0.0))
             profit_over[key] = True
         elif pnl < line * 0.9:
             profit_over[key] = False          # far enough below: ready to ring again
@@ -2953,6 +2960,22 @@ def check_profit(rows):
         log_err("profit above %d: %s" % (line, ", ".join(rang)))
         if buzz_on("BUZZ_PROFIT"):
             beep("profit")
+    profit_notify()
+
+
+def profit_notify():
+    """Send waiting profit notifications; a failed one is tried again at the next refresh."""
+    if not profit_pending or not (cfg("NTFY_TOPIC") or "").strip():
+        return
+    for key in list(profit_pending):
+        title, msg = profit_pending[key]
+        try:
+            ntfy_send(title, msg, "moneybag")
+        except Exception as e:  # noqa: BLE001
+            log_err("profit ntfy failed: %r" % (e,))
+            free_sockets()
+            return
+        del profit_pending[key]
 
 
 class StocksScreen(Screen):
@@ -5804,6 +5827,8 @@ def settings_html(msg=""):
                '<label><input type=checkbox name=BUZZ_TGT value=on%s>Target hit</label>'
                '<label><input type=checkbox name=BUZZ_PROFIT value=on%s>A stock in My stocks goes above '
                '&#8377;<input type=text name=PROFIT_BEEP value="%s" style="width:70px"> profit</label>'
+               '<label style="margin-left:24px"><input type=checkbox name=NTFY_PROFIT value=on%s>'
+               '...and send a notification (ntfy topic from the My stocks page)</label>'
                '<label><input type=checkbox name=BUZZ_WICKET value=on%s>Wicket in a match you follow</label>'
                '<label><input type=checkbox name=BUZZ_KITE value=on%s>Kite login expired</label>'
                '<label><input type=checkbox name=BUZZ_NIGHT value=on%s>Also in night mode</label>'
@@ -5815,7 +5840,7 @@ def settings_html(msg=""):
                                      '<small>Couldn\'t set up GPIO %s for the buzzer (see /debug).</small>'
                                      % esc(str(cfg("BUZZER_PIN") or "1"))),
                   ck("BUZZER"), ck("BUZZ_SL"), ck("BUZZ_TGT"), ck("BUZZ_PROFIT"),
-                  esc(str(profit_line() or "")), ck("BUZZ_WICKET"), ck("BUZZ_KITE"),
+                  esc(str(profit_line() or "")), ck("NTFY_PROFIT"), ck("BUZZ_WICKET"), ck("BUZZ_KITE"),
                   ck("BUZZ_NIGHT", "off"), esc(str(cfg("BUZZER_PIN") or "1")),
                   " &nbsp; ".join('<a href="/settings/buzz?s=%s">%s</a>' % (k, n) for k, n in SOUND_LABELS)))
     out.append('<h3 id=presence>Presence sensor</h3>'
@@ -5948,7 +5973,7 @@ def settings_save(request: Request):
         CFG["STAT_CLASS"] = g("STAT_CLASS")
     pb = (g("PROFIT_BEEP") or "").strip().replace(",", "")
     CFG["PROFIT_BEEP"] = pb if pb.isdigit() and int(pb) > 0 else "off"
-    for k in ("BUZZER", "BUZZ_SL", "BUZZ_TGT", "BUZZ_PROFIT", "BUZZ_WICKET", "BUZZ_KITE", "BUZZ_NIGHT",
+    for k in ("BUZZER", "BUZZ_SL", "BUZZ_TGT", "BUZZ_PROFIT", "NTFY_PROFIT", "BUZZ_WICKET", "BUZZ_KITE", "BUZZ_NIGHT",
               "PRESENCE", "PRES_GREET", "BUZZ_BREAK", "BUZZ_AWAY"):
         CFG[k] = "on" if g(k) else "off"
     CFG["AWAY_MINUTES"] = str(_num(g("AWAY_MINUTES"), 0, 240, 5))
