@@ -363,6 +363,12 @@ class DIO:
     def switch_to_input(self, pull=None): pass
     def deinit(self): pass
 dio.DigitalInOut = DIO; dio.Pull = types.SimpleNamespace(UP=1, DOWN=2)
+dio.Direction = types.SimpleNamespace(INPUT=0, OUTPUT=1)
+npw = types.ModuleType("neopixel_write")
+npw.writes = []
+def _npw(pin, buf): npw.writes.append(bytes(buf))
+npw.neopixel_write = _npw
+sys.modules["neopixel_write"] = npw
 sys.modules["digitalio"] = dio
 bio = types.ModuleType("busio")
 class _UART:

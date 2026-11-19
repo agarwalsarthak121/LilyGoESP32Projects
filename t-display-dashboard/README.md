@@ -88,6 +88,15 @@ The original grey look:
 
 **Profit bell:** the buzzer rings once when a stock in My stocks goes above **₹1,000 profit** (Settings → Sound; change the amount or untick it). It rings again only after that stock's profit has dropped below 90% of the amount, so a P&L hovering around the line doesn't keep ringing, and stocks already above it when the board starts stay quiet. It also sends an ntfy notification to your phone (untick *...and send a notification* to turn that off). Target and stop-loss alerts are unchanged.
 
+## LED ring (optional)
+
+A 16-LED WS2812B (NeoPixel) ring: **5V → 5V side pin 1**, **GND → any G** (3V side pin 3 is free), **DI → GPIO 13 (5V side pin 5)**. DO stays empty. No library needed (uses the built-in `neopixel_write`).
+
+- **Normally:** a soft green/red glow for today's P&L (or a minutes clock, a light while you're at the desk, or off).
+- **Flashes:** red for a wicket, green spin for the profit bell, gold/red for target/stop-loss, blue breathing for the break reminder, a warm wipe when you sit down.
+- Dark while you're away and at night. Brightness capped at 25% (max 60%): 16 LEDs at full white draw about 1 A.
+- **http://board:8080/leds** — try every effect, pick the idle mode, switch events on/off.
+
 ## Presence sensor (optional)
 
 A Waveshare HMMD mmWave radar (24 GHz) tells the board whether you're at the desk.

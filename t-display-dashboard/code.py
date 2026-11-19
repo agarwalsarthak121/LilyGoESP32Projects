@@ -2912,6 +2912,8 @@ def check_alerts(rows):
             save_cfg()
         except Exception as e:  # noqa: BLE001
             log_err("saving alerts failed: %r" % (e,))
+    if "sl" in sounds or "tgt" in sounds:
+        led_event("sl" if "sl" in sounds else "target")
     if "sl" in sounds and buzz_on("BUZZ_SL"):        # one sound per kind, stop-loss first
         beep("sl")
     if "tgt" in sounds and buzz_on("BUZZ_TGT"):
@@ -2958,6 +2960,7 @@ def check_profit(rows):
             profit_over[key] = True           # first look, just under the line: don't ring yet
     if rang:
         log_err("profit above %d: %s" % (line, ", ".join(rang)))
+        led_event("profit")
         if buzz_on("BUZZ_PROFIT"):
             beep("profit")
     profit_notify()
@@ -5098,9 +5101,10 @@ def cb_fetch(mid):
         cric_debug["parsed"] = d
         seen = cric_wkts.get(mid)                # wickets so far (the most ever seen: a glitch can't re-trigger)
         cric_wkts[mid] = max(seen or 0, d["wkts"])
-        if seen is not None and d["wkts"] > seen and d["started"] and not d["matchEnded"] \
-                and buzz_on("BUZZ_WICKET"):
-            beep("wicket")
+        if seen is not None and d["wkts"] > seen and d["started"] and not d["matchEnded"]:
+            led_event("wicket")
+            if buzz_on("BUZZ_WICKET"):
+                beep("wicket")
         if d["matchEnded"]:
             cric_gone.setdefault(mid, now)
         else:
@@ -5572,7 +5576,7 @@ def home(request: Request):
                 '<p><button style="padding:10px 18px">Send to board</button></p></form>')
         body = PAGE % ("Status: " + kite_status, link + form)
     body = body.replace("</body>", '<p style="margin-top:32px"><a href="/todo">To-do list</a> '
-                        '<a href="/stocks">My stocks</a> <a href="/ask">Ask AI</a> <a href="/anim">Animations</a> <a href="/presence">Presence</a> <a href="/settings">Settings</a></p>'
+                        '<a href="/stocks">My stocks</a> <a href="/ask">Ask AI</a> <a href="/anim">Animations</a> <a href="/presence">Presence</a> <a href="/leds">LED ring</a> <a href="/settings">Settings</a></p>'
                         '<p style="margin-top:16px"><a href="/cricket" '
                         'style="background:#444">Cricket matches</a></p>'
                         '<p style="margin-top:16px"><a href="/rotate?on=%d" style="background:#444">'
@@ -6223,6 +6227,76 @@ def todo_do(request: Request):
     except Exception as e:  # noqa: BLE001
         return _page(request, todo_html("Couldn't save: %s" % esc(str(e))))
     return _page(request, '<!doctype html><meta http-equiv="refresh" content="0;url=/todo">')
+
+
+# ------------------------------------------------------------- LED ring page
+@server.route("/leds")
+def leds_page(request: Request):
+    if led_io is None:
+        tip = ("The ring isn't set up: %s" % esc(led_err)) if led_err else \
+              "The ring pin is switched off - set it below and restart."
+    else:
+        tip = "Ring on GPIO %s, %d LEDs, brightness %d%%." % (
+            esc(str(cfg("LED_PIN") or "13")), led_n, int(led_bright() * 100))
+    mode = cfg("LED_MODE") or "pnl"
+    tests = " &nbsp; ".join('<a href="/leds/do?fx=%s">%s</a>' % (k, n) for k, n in (
+        ("rainbow", "Rainbow"), ("wicket", "Wicket"), ("profit", "Profit"), ("target", "Target"),
+        ("sl", "Stop-loss"), ("break", "Break"), ("hello", "Welcome")))
+    modes = "".join('<label><input type=radio name=LED_MODE value=%s%s>%s</label>' % (
+        k, " checked" if k == mode else "", n) for k, n in LED_MODES)
+    evs = "".join('<label><input type=checkbox name=LED_%s value=on%s>%s</label>' % (
+        k, "" if (cfg("LED_" + k) or "on") == "off" else " checked", n) for k, n in LED_EVENTS)
+    body = ("<h3>Try an effect</h3><p>%s</p>"
+            "<form action='/leds/save'><h3>When nothing is happening</h3>%s"
+            "<h3>Flash for</h3>%s"
+            "<label><input type=checkbox name=LED_NIGHT value=on%s>Also in night mode</label>"
+            "<label>Brightness <input type=number name=LED_BRIGHT min=1 max=60 value=%d>%% "
+            "<small>(max 60; 25 is plenty on a desk)</small></label>"
+            "<label>Ring on GPIO <input type=text name=LED_PIN value='%s' style='width:50px'> with "
+            "<input type=number name=LED_COUNT min=1 max=60 value=%d> LEDs <small>(restart after changing)</small></label>"
+            "<p><button>Save</button></p></form>"
+            "<p><small>The ring goes dark when you're away from the desk and at night.</small></p>"
+            "<p><a href='/' style='background:#444'>Back</a></p>") % (
+        tests, modes, evs, "" if (cfg("LED_NIGHT") or "off") == "off" else " checked",
+        int(led_bright() * 100), esc(str(cfg("LED_PIN") or "13")),
+        _num(cfg("LED_COUNT") or "16", 1, 60, 16))
+    return Response(request, PAGE.replace("Zerodha login", "LED ring") % (tip, body), content_type="text/html")
+
+
+@server.route("/leds/do")
+def leds_do(request: Request):
+    fx = request.query_params.get("fx", safe=False) or ""
+    if fx in LED_FX_SECS:
+        global led_fx
+        led_fx = (fx, time.monotonic())                 # tests play even if that event is switched off
+    return Response(request, '<!doctype html><meta http-equiv="refresh" content="0;url=/leds">',
+                    content_type="text/html")
+
+
+@server.route("/leds/save")
+def leds_save(request: Request):
+    q = request.query_params
+
+    def g(k):
+        v = q.get(k, safe=False)
+        return None if v is None else unquote(v).strip()
+    m = g("LED_MODE")
+    if m in [k for k, _ in LED_MODES]:
+        CFG["LED_MODE"] = m
+    for k, _ in LED_EVENTS:
+        CFG["LED_" + k] = "on" if g("LED_" + k) else "off"
+    CFG["LED_NIGHT"] = "on" if g("LED_NIGHT") else "off"
+    CFG["LED_BRIGHT"] = str(_num(g("LED_BRIGHT"), 1, 60, 25))
+    pin = (g("LED_PIN") or "13").lower()
+    if (pin.isdigit() and int(pin) < 49) or pin == "off":
+        CFG["LED_PIN"] = pin
+    CFG["LED_COUNT"] = str(_num(g("LED_COUNT"), 1, 60, 16))
+    try:
+        save_cfg()
+    except Exception as e:  # noqa: BLE001
+        log_err("LED settings save: %r" % (e,))
+    return Response(request, '<!doctype html><meta http-equiv="refresh" content="0;url=/leds">',
+                    content_type="text/html")
 
 
 # ------------------------------------------------------------- Presence sensor page
@@ -7611,6 +7685,8 @@ def pres_tick(now):
             gone = now - pres_last_here
             if gone > 180 or pres_session is None:            # a new sitting
                 pres_session, pres_nudged = now, 0
+                if gone < 1e8:
+                    led_event("hello")
                 if day_log is not None:
                     day_log[5] += 1
             pres_wake(now)
@@ -7643,6 +7719,7 @@ def pres_tick(now):
             pet.greet_msg = "You've been at the desk %s. Stretch break? *paw*" % dur_text(now - pres_session)
             pet.greet_until = now + 30
             force_show = "pet"
+        led_event("break")
         if buzz_on("BUZZ_BREAK"):
             beep("break")
 
@@ -7657,6 +7734,156 @@ def desk_text():
         return ""
     m = int(desk_secs // 60)
     return "AT DESK %dH %02dM" % (m // 60, m % 60)
+
+
+# ------------------------------------------------------------- LED ring (WS2812B / NeoPixel)
+# 16-LED ring: 5V -> 5V-side pin 1, GND -> any G, DI -> GPIO 13 (5V-side pin 5). Uses the
+# built-in neopixel_write module, so no library is needed. Brightness is capped (16 LEDs at
+# full white would pull about 1 A through the board). Page: http://<board>:8080/leds
+LED_MODES = (("pnl", "Today's P&L glow"), ("clock", "Minutes clock"), ("presence", "Soft light while you're here"),
+             ("off", "Off (only events)"))
+LED_EVENTS = (("WICKET", "Wicket: red flash"), ("PROFIT", "Profit bell: green spin"),
+              ("ALERTS", "Stop-loss / target hit"), ("BREAK", "Break reminder: blue breathing"),
+              ("HELLO", "Welcome back when you sit down"))
+LED_FX_SECS = {"wicket": 3.0, "profit": 3.0, "sl": 3.0, "target": 3.0, "break": 8.0, "hello": 2.0,
+               "rainbow": 6.0}
+led_io = None
+led_nw = None
+led_n = 16
+led_buf = None
+led_err = ""
+led_fx = None                # (effect, started at)
+led_next = 0.0
+led_prev = None
+
+
+def led_bright():
+    return _num(cfg("LED_BRIGHT") or "25", 1, 60, 25) / 100
+
+
+def leds_init():
+    global led_io, led_nw, led_n, led_buf, led_err
+    pin = str(cfg("LED_PIN") or "13").strip().lower()
+    if pin in ("", "off", "none", "no"):
+        return
+    try:
+        import neopixel_write
+        led_nw = neopixel_write
+        led_io = digitalio.DigitalInOut(getattr(microcontroller.pin, "GPIO" + pin))
+        led_io.direction = digitalio.Direction.OUTPUT
+        led_n = _num(cfg("LED_COUNT") or "16", 1, 60, 16)
+        led_buf = bytearray(3 * led_n)
+        led_nw.neopixel_write(led_io, led_buf)          # all off
+    except Exception as e:  # noqa: BLE001
+        led_io = None
+        led_err = "LED ring on GPIO %s: %r" % (pin, e)
+        log_err(led_err)
+
+
+def leds_show(cols):
+    """cols: list of (r, g, b) 0-255, one per LED."""
+    global led_prev
+    if led_io is None:
+        return
+    b = led_bright()
+    out = bytearray(3 * led_n)
+    for i, c in enumerate(cols[:led_n]):
+        out[3 * i] = int(c[1] * b)                       # the ring wants green, red, blue
+        out[3 * i + 1] = int(c[0] * b)
+        out[3 * i + 2] = int(c[2] * b)
+    if out == led_prev:
+        return
+    led_prev = out
+    try:
+        led_nw.neopixel_write(led_io, out)
+    except Exception as e:  # noqa: BLE001
+        log_err("LED ring: %r" % (e,))
+
+
+def led_event(name):
+    """Play a short effect, if that kind of event is switched on (or always, for tests)."""
+    global led_fx
+    key = {"sl": "ALERTS", "target": "ALERTS"}.get(name, name.upper())
+    if name != "rainbow" and (cfg("LED_" + key) or "on") == "off":
+        return
+    led_fx = (name, time.monotonic())
+
+
+def _wheel(h):
+    """Hue 0..1 -> (r, g, b)."""
+    h = (h % 1.0) * 6
+    i, f = int(h), h - int(h)
+    q, t_ = int(255 * (1 - f)), int(255 * f)
+    return ((255, t_, 0), (q, 255, 0), (0, 255, t_), (0, q, 255), (t_, 0, 255), (255, 0, q))[i % 6]
+
+
+def _spin(t, col, back=False, tail=5):
+    n = led_n
+    head = int(t * n * 1.5) % n
+    out = [(0, 0, 0)] * n
+    for k in range(tail):
+        i = (head - k) % n if not back else (n - 1 - head + k) % n
+        f = (tail - k) / tail
+        out[i] = (int(col[0] * f), int(col[1] * f), int(col[2] * f))
+    return out
+
+
+def led_frame(now):
+    """What the ring shows right now."""
+    global led_fx
+    n = led_n
+    if led_fx is not None:
+        name, t0 = led_fx
+        t = now - t0
+        if t > LED_FX_SECS.get(name, 3.0):
+            led_fx = None
+        elif name == "wicket":
+            return [(255, 0, 0) if int(t * 8) % 2 == 0 else (0, 0, 0)] * n
+        elif name == "profit":
+            return _spin(t, (0, 255, 60))
+        elif name == "target":
+            return _spin(t, (255, 180, 0))
+        elif name == "sl":
+            return [(255, 40, 0) if int(t * 4) % 2 == 0 else (60, 0, 0)] * n
+        elif name == "break":
+            lvl = 0.15 + 0.85 * (0.5 - 0.5 * math.cos(t * 2.4))
+            return [(0, int(90 * lvl), int(255 * lvl))] * n
+        elif name == "hello":
+            lit = min(n, int(t / 1.2 * n) + 1)
+            return [(255, 170, 90) if i < lit else (0, 0, 0) for i in range(n)]
+        elif name == "rainbow":
+            return [_wheel(i / n + t * 0.3) for i in range(n)]
+    mode = cfg("LED_MODE") or "pnl"
+    if mode == "pnl" and port_day_pct is not None:
+        lvl = 0.25 + 0.75 * min(1.0, abs(port_day_pct) / 2.0)
+        lvl *= 0.85 + 0.15 * math.sin(now * 1.5)        # a slow, gentle breath
+        c = (0, 200, 60) if port_day_pct >= 0 else (220, 30, 0)
+        return [(int(c[0] * lvl), int(c[1] * lvl), int(c[2] * lvl))] * n
+    if mode == "clock":
+        t = time.localtime()
+        lit = t.tm_min * n // 60
+        out = [(0, 70, 90) if i < lit else (0, 0, 0) for i in range(n)]
+        out[(t.tm_min * n // 60) % n] = (0, 160, 200)
+        out[(t.tm_sec * n // 60) % n] = (200, 200, 200)
+        return out
+    if mode == "presence" and pres_here:
+        return [(120, 70, 30)] * n
+    return [(0, 0, 0)] * n
+
+
+def leds_tick(now):
+    global led_next
+    if led_io is None or now < led_next:
+        return
+    led_next = now + 0.04
+    if screen_asleep or (night_now and (cfg("LED_NIGHT") or "off") != "on" and
+                         (led_fx is None or led_fx[0] != "rainbow")):
+        leds_show([(0, 0, 0)] * led_n)                  # nobody here, or night: dark
+        return
+    leds_show(led_frame(now))
+
+
+leds_init()
 
 
 presence_init()
@@ -7820,6 +8047,10 @@ while True:
             pres_tick(now_m)                 # presence sensor: desk time, screen off when away
         except Exception as e:  # noqa: BLE001
             log_err("presence: %r" % (e,))
+        try:
+            leds_tick(now_m)                 # LED ring
+        except Exception as e:  # noqa: BLE001
+            log_err("LED ring: %r" % (e,))
 
         # night mode: dark, dim clock only (a button press wakes other screens for 60 s)
         night = is_night(t)
