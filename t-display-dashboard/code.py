@@ -6243,11 +6243,15 @@ def leds_page(request: Request):
         ("rainbow", "Rainbow"), ("party", "Party"), ("police", "Police"), ("heartbeat", "Heartbeat"),
         ("sparkle", "Sparkle"), ("wicket", "Wicket"), ("profit", "Profit"), ("target", "Target"),
         ("sl", "Stop-loss"), ("break", "Break"), ("hello", "Welcome")))
-    pct = int(led_bright() * 100)
-    bright = ("<p style='font-size:22px'><a href='/leds/do?b=down'>&minus;</a> &nbsp;<b>%d%%</b>&nbsp; "
-              "<a href='/leds/do?b=up'>+</a></p><p>%s</p>") % (pct, " &nbsp; ".join(
-                  "<a href='/leds/do?b=%d'%s>%d%%</a>" % (v, " style='background:#2a6'" if v == pct else "", v)
-                  for v in (5, 10, 25, 40, 60)))
+    def _bctl(key, label, pct, presets):
+        return ("<p><b>%s</b></p><p style='font-size:22px'><a href='/leds/do?%s=down'>&minus;</a> &nbsp;<b>%d%%</b>"
+                "&nbsp; <a href='/leds/do?%s=up'>+</a></p><p>%s</p>") % (label, key, pct, key, " &nbsp; ".join(
+                    "<a href='/leds/do?%s=%d'%s>%d%%</a>" % (key, v, " style='background:#2a6'" if v == pct else "", v)
+                    for v in presets))
+    bright = (_bctl("b", "Day", int(led_bright(False) * 100), (5, 10, 25, 40, 60)) +
+              _bctl("nb", "Night light", int(led_bright(True) * 100), (1, 2, 5, 10, 20)) +
+              "<p><a href='/leds/do?fx=nightlight'>Preview the night light (10 s)</a>%s</p>" % (
+                  " &nbsp;<small>Night mode is on now, so the night-light level applies.</small>" if night_now else ""))
     modes = "".join('<label><input type=radio name=LED_MODE value=%s%s>%s</label>' % (
         k, " checked" if k == mode else "", n) for k, n in LED_MODES)
     evs = "".join('<label><input type=checkbox name=LED_%s value=on%s>%s</label>' % (
@@ -6256,14 +6260,20 @@ def leds_page(request: Request):
             "<form action='/leds/save'><h3>When nothing is happening</h3>%s"
             "<label>Colour for comet / breathing / solid <input type=color name=LED_COLOR value='#%02x%02x%02x'></label>"
             "<h3>Flash for</h3>%s"
-            "<label><input type=checkbox name=LED_NIGHT value=on%s>Also in night mode</label>"
+            "<h3>Night light</h3>"
+            "<label><input type=checkbox name=LED_NIGHTLIGHT value=on%s>In night mode, glow as a night light "
+            "(stays on even when you're away from the desk)</label>"
+            "<label>Night-light colour <input type=color name=LED_NCOLOR value='#%02x%02x%02x'></label>"
+            "<label><input type=checkbox name=LED_NIGHT value=on%s>Also flash for wickets and alerts at night</label>"
 
             "<label>Ring on GPIO <input type=text name=LED_PIN value='%s' style='width:50px'> with "
             "<input type=number name=LED_COUNT min=1 max=60 value=%d> LEDs <small>(restart after changing)</small></label>"
             "<p><button>Save</button></p></form>"
-            "<p><small>The ring goes dark when you're away from the desk and at night.</small></p>"
+            "<p><small>In the day the ring goes dark when you're away from the desk.</small></p>"
             "<p><a href='/' style='background:#444'>Back</a></p>") % (
         bright, tests, modes, led_colour()[0], led_colour()[1], led_colour()[2], evs,
+        "" if (cfg("LED_NIGHTLIGHT") or "on") == "off" else " checked",
+        led_ncolour()[0], led_ncolour()[1], led_ncolour()[2],
         "" if (cfg("LED_NIGHT") or "off") == "off" else " checked", esc(str(cfg("LED_PIN") or "13")),
         _num(cfg("LED_COUNT") or "16", 1, 60, 16))
     return Response(request, PAGE.replace("Zerodha login", "LED ring") % (tip, body), content_type="text/html")
@@ -6275,12 +6285,16 @@ def leds_do(request: Request):
     fx = request.query_params.get("fx", safe=False) or ""
     if fx in LED_FX_SECS:
         led_fx = (fx, time.monotonic())                 # tests play even if that event is switched off
-    b = request.query_params.get("b", safe=False) or ""
-    if b:
-        cur = int(led_bright() * 100)
+    for qk, ck_, night in (("b", "LED_BRIGHT", False), ("nb", "LED_NBRIGHT", True)):
+        b = request.query_params.get(qk, safe=False) or ""
+        if not b:
+            continue
+        cur = int(led_bright(night) * 100 + 0.5)
         new = cur + (5 if cur >= 10 else 1) if b == "up" else (
             cur - (5 if cur > 10 else 1) if b == "down" else _num(b, 1, 60, cur))
-        CFG["LED_BRIGHT"] = str(max(1, min(60, new)))
+        CFG[ck_] = str(max(1, min(60, new)))
+        if night and not night_now:
+            led_fx = ("nightlight", time.monotonic())   # show the new night level for a moment
         led_prev = None                                 # show the new brightness at once
         try:
             save_cfg()
@@ -6303,6 +6317,10 @@ def leds_save(request: Request):
     for k, _ in LED_EVENTS:
         CFG["LED_" + k] = "on" if g("LED_" + k) else "off"
     CFG["LED_NIGHT"] = "on" if g("LED_NIGHT") else "off"
+    CFG["LED_NIGHTLIGHT"] = "on" if g("LED_NIGHTLIGHT") else "off"
+    nc = (g("LED_NCOLOR") or "").lstrip("#").lower()
+    if len(nc) == 6 and all(ch in "0123456789abcdef" for ch in nc):
+        CFG["LED_NCOLOR"] = "#" + nc
     c = (g("LED_COLOR") or "").lstrip("#").lower()
     if len(c) == 6 and all(ch in "0123456789abcdef" for ch in c):
         CFG["LED_COLOR"] = "#" + c
@@ -7767,7 +7785,8 @@ LED_EVENTS = (("WICKET", "Wicket: red flash"), ("PROFIT", "Profit bell: green sp
               ("ALERTS", "Stop-loss / target hit"), ("BREAK", "Break reminder: blue breathing"),
               ("HELLO", "Welcome back when you sit down"))
 LED_FX_SECS = {"wicket": 3.0, "profit": 3.0, "sl": 3.0, "target": 3.0, "break": 8.0, "hello": 2.0,
-               "rainbow": 6.0, "party": 5.0, "police": 5.0, "heartbeat": 5.0, "sparkle": 5.0}
+               "rainbow": 6.0, "party": 5.0, "police": 5.0, "heartbeat": 5.0, "sparkle": 5.0,
+               "nightlight": 10.0}
 led_tw = []                  # twinkle / sparkle brightness per LED
 
 
@@ -7821,8 +7840,22 @@ led_next = 0.0
 led_prev = None
 
 
-def led_bright():
+def led_bright(night=None):
+    """Day brightness, or the night-light brightness at night (0..1)."""
+    if night is None:
+        night = bool(night_now) or (led_fx is not None and led_fx[0] == "nightlight")
+    if night:
+        return _num(cfg("LED_NBRIGHT") or "5", 1, 60, 5) / 100
     return _num(cfg("LED_BRIGHT") or "25", 1, 60, 25) / 100
+
+
+def led_ncolour():
+    """Night-light colour, warm amber unless changed on /leds."""
+    v = str(cfg("LED_NCOLOR") or "#ff7a1a").lstrip("#")
+    try:
+        return int(v[0:2], 16), int(v[2:4], 16), int(v[4:6], 16)
+    except (ValueError, IndexError):
+        return 255, 122, 26
 
 
 def leds_init():
@@ -7870,6 +7903,8 @@ def led_event(name):
     key = {"sl": "ALERTS", "target": "ALERTS"}.get(name, name.upper())
     if name != "rainbow" and (cfg("LED_" + key) or "on") == "off":
         return
+    if night_now and (cfg("LED_NIGHT") or "off") != "on":
+        return                                   # at night the ring stays a calm night light
     led_fx = (name, time.monotonic())
 
 
@@ -7966,9 +8001,21 @@ def leds_tick(now):
     if led_io is None or now < led_next:
         return
     led_next = now + 0.04
-    if screen_asleep or (night_now and (cfg("LED_NIGHT") or "off") != "on" and
-                         (led_fx is None or led_fx[0] != "rainbow")):
-        leds_show([(0, 0, 0)] * led_n)                  # nobody here, or night: dark
+    if led_fx is not None and led_fx[0] == "nightlight":          # preview from /leds
+        if now - led_fx[1] < LED_FX_SECS["nightlight"]:
+            leds_show([led_ncolour()] * led_n)
+            return
+        globals()["led_fx"] = None
+    if night_now:
+        if led_fx is not None:                                     # an event or a test, at night
+            leds_show(led_frame(now))
+        elif (cfg("LED_NIGHTLIGHT") or "on") != "off":
+            leds_show([led_ncolour()] * led_n)                     # night light, even when away
+        else:
+            leds_show([(0, 0, 0)] * led_n)
+        return
+    if screen_asleep:
+        leds_show([(0, 0, 0)] * led_n)                  # nobody at the desk: dark
         return
     leds_show(led_frame(now))
 

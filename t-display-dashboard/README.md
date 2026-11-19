@@ -96,7 +96,8 @@ A 16-LED WS2812B (NeoPixel) ring: **5V → 5V side pin 1**, **GND → any G** (3
 - **One-off effects to try:** rainbow, party strobe, police, heartbeat, sparkle.
 - **Brightness:** − / + buttons and 5–60% presets at the top of `/leds`, applied at once.
 - **Flashes:** red for a wicket, green spin for the profit bell, gold/red for target/stop-loss, blue breathing for the break reminder, a warm wipe when you sit down.
-- Dark while you're away and at night. Brightness capped at 25% (max 60%): 16 LEDs at full white draw about 1 A.
+- **Night light:** in night mode the ring glows warm amber at its own, much lower brightness (default 5%, with − / + and 1–20% presets on `/leds`), even when you're away from the desk. Colour picker, preview button, and a switch to turn it off. Wicket/alert flashes stay off at night unless you tick *Also flash at night*.
+- In the day it's dark while you're away. Brightness capped at 25% (max 60%): 16 LEDs at full white draw about 1 A.
 - **http://board:8080/leds** — try every effect, pick the idle mode, switch events on/off.
 
 ## Presence sensor (optional)
