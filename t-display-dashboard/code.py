@@ -6240,35 +6240,52 @@ def leds_page(request: Request):
             esc(str(cfg("LED_PIN") or "13")), led_n, int(led_bright() * 100))
     mode = cfg("LED_MODE") or "pnl"
     tests = " &nbsp; ".join('<a href="/leds/do?fx=%s">%s</a>' % (k, n) for k, n in (
-        ("rainbow", "Rainbow"), ("wicket", "Wicket"), ("profit", "Profit"), ("target", "Target"),
+        ("rainbow", "Rainbow"), ("party", "Party"), ("police", "Police"), ("heartbeat", "Heartbeat"),
+        ("sparkle", "Sparkle"), ("wicket", "Wicket"), ("profit", "Profit"), ("target", "Target"),
         ("sl", "Stop-loss"), ("break", "Break"), ("hello", "Welcome")))
+    pct = int(led_bright() * 100)
+    bright = ("<p style='font-size:22px'><a href='/leds/do?b=down'>&minus;</a> &nbsp;<b>%d%%</b>&nbsp; "
+              "<a href='/leds/do?b=up'>+</a></p><p>%s</p>") % (pct, " &nbsp; ".join(
+                  "<a href='/leds/do?b=%d'%s>%d%%</a>" % (v, " style='background:#2a6'" if v == pct else "", v)
+                  for v in (5, 10, 25, 40, 60)))
     modes = "".join('<label><input type=radio name=LED_MODE value=%s%s>%s</label>' % (
         k, " checked" if k == mode else "", n) for k, n in LED_MODES)
     evs = "".join('<label><input type=checkbox name=LED_%s value=on%s>%s</label>' % (
         k, "" if (cfg("LED_" + k) or "on") == "off" else " checked", n) for k, n in LED_EVENTS)
-    body = ("<h3>Try an effect</h3><p>%s</p>"
+    body = ("<h3>Brightness</h3>%s<h3>Try an effect</h3><p>%s</p>"
             "<form action='/leds/save'><h3>When nothing is happening</h3>%s"
+            "<label>Colour for comet / breathing / solid <input type=color name=LED_COLOR value='#%02x%02x%02x'></label>"
             "<h3>Flash for</h3>%s"
             "<label><input type=checkbox name=LED_NIGHT value=on%s>Also in night mode</label>"
-            "<label>Brightness <input type=number name=LED_BRIGHT min=1 max=60 value=%d>%% "
-            "<small>(max 60; 25 is plenty on a desk)</small></label>"
+
             "<label>Ring on GPIO <input type=text name=LED_PIN value='%s' style='width:50px'> with "
             "<input type=number name=LED_COUNT min=1 max=60 value=%d> LEDs <small>(restart after changing)</small></label>"
             "<p><button>Save</button></p></form>"
             "<p><small>The ring goes dark when you're away from the desk and at night.</small></p>"
             "<p><a href='/' style='background:#444'>Back</a></p>") % (
-        tests, modes, evs, "" if (cfg("LED_NIGHT") or "off") == "off" else " checked",
-        int(led_bright() * 100), esc(str(cfg("LED_PIN") or "13")),
+        bright, tests, modes, led_colour()[0], led_colour()[1], led_colour()[2], evs,
+        "" if (cfg("LED_NIGHT") or "off") == "off" else " checked", esc(str(cfg("LED_PIN") or "13")),
         _num(cfg("LED_COUNT") or "16", 1, 60, 16))
     return Response(request, PAGE.replace("Zerodha login", "LED ring") % (tip, body), content_type="text/html")
 
 
 @server.route("/leds/do")
 def leds_do(request: Request):
+    global led_fx, led_prev
     fx = request.query_params.get("fx", safe=False) or ""
     if fx in LED_FX_SECS:
-        global led_fx
         led_fx = (fx, time.monotonic())                 # tests play even if that event is switched off
+    b = request.query_params.get("b", safe=False) or ""
+    if b:
+        cur = int(led_bright() * 100)
+        new = cur + (5 if cur >= 10 else 1) if b == "up" else (
+            cur - (5 if cur > 10 else 1) if b == "down" else _num(b, 1, 60, cur))
+        CFG["LED_BRIGHT"] = str(max(1, min(60, new)))
+        led_prev = None                                 # show the new brightness at once
+        try:
+            save_cfg()
+        except Exception as e:  # noqa: BLE001
+            log_err("LED brightness save: %r" % (e,))
     return Response(request, '<!doctype html><meta http-equiv="refresh" content="0;url=/leds">',
                     content_type="text/html")
 
@@ -6286,7 +6303,9 @@ def leds_save(request: Request):
     for k, _ in LED_EVENTS:
         CFG["LED_" + k] = "on" if g("LED_" + k) else "off"
     CFG["LED_NIGHT"] = "on" if g("LED_NIGHT") else "off"
-    CFG["LED_BRIGHT"] = str(_num(g("LED_BRIGHT"), 1, 60, 25))
+    c = (g("LED_COLOR") or "").lstrip("#").lower()
+    if len(c) == 6 and all(ch in "0123456789abcdef" for ch in c):
+        CFG["LED_COLOR"] = "#" + c
     pin = (g("LED_PIN") or "13").lower()
     if (pin.isdigit() and int(pin) < 49) or pin == "off":
         CFG["LED_PIN"] = pin
@@ -7741,12 +7760,57 @@ def desk_text():
 # built-in neopixel_write module, so no library is needed. Brightness is capped (16 LEDs at
 # full white would pull about 1 A through the board). Page: http://<board>:8080/leds
 LED_MODES = (("pnl", "Today's P&L glow"), ("clock", "Minutes clock"), ("presence", "Soft light while you're here"),
-             ("off", "Off (only events)"))
+             ("rainbow", "Slow rainbow"), ("comet", "Spinning comet"), ("fire", "Fireplace flicker"),
+             ("ocean", "Ocean waves"), ("twinkle", "Twinkling stars"), ("breathe", "Breathing colour"),
+             ("solid", "Solid colour"), ("off", "Off (only events)"))
 LED_EVENTS = (("WICKET", "Wicket: red flash"), ("PROFIT", "Profit bell: green spin"),
               ("ALERTS", "Stop-loss / target hit"), ("BREAK", "Break reminder: blue breathing"),
               ("HELLO", "Welcome back when you sit down"))
 LED_FX_SECS = {"wicket": 3.0, "profit": 3.0, "sl": 3.0, "target": 3.0, "break": 8.0, "hello": 2.0,
-               "rainbow": 6.0}
+               "rainbow": 6.0, "party": 5.0, "police": 5.0, "heartbeat": 5.0, "sparkle": 5.0}
+led_tw = []                  # twinkle / sparkle brightness per LED
+
+
+def led_colour():
+    """The colour picked on /leds for breathing / solid / comet, as (r, g, b)."""
+    v = str(cfg("LED_COLOR") or "#ff8c1a").lstrip("#")
+    try:
+        return int(v[0:2], 16), int(v[2:4], 16), int(v[4:6], 16)
+    except (ValueError, IndexError):
+        return 255, 140, 26
+
+
+def _scale(c, f):
+    return int(c[0] * f), int(c[1] * f), int(c[2] * f)
+
+
+def _fire():
+    """Each LED's 'heat' wanders up and down, like embers."""
+    global led_tw
+    if len(led_tw) != led_n:
+        led_tw = [0.6] * led_n
+    out = []
+    for i in range(led_n):
+        h = led_tw[i] + (random.random() - 0.5) * 0.3
+        h = 0.25 if h < 0.25 else (1.0 if h > 1.0 else h)
+        led_tw[i] = h
+        out.append((int(255 * h), int(90 * h * h), int(8 * h)))
+    return out
+
+
+def _twinkle(new_chance, col=None):
+    """Random LEDs light up and fade out."""
+    global led_tw
+    if len(led_tw) != led_n:
+        led_tw = [0.0] * led_n
+    out = []
+    for i in range(led_n):
+        led_tw[i] *= 0.88
+        if random.random() < new_chance:
+            led_tw[i] = 1.0
+        c = col or (255, 240, 200)
+        out.append(_scale(c, led_tw[i]))
+    return out
 led_io = None
 led_nw = None
 led_n = 16
@@ -7853,7 +7917,33 @@ def led_frame(now):
             return [(255, 170, 90) if i < lit else (0, 0, 0) for i in range(n)]
         elif name == "rainbow":
             return [_wheel(i / n + t * 0.3) for i in range(n)]
+        elif name == "party":                           # fast rainbow strobe
+            return [_wheel(i / n + t * 1.5) if int(t * 10) % 2 == 0 else (0, 0, 0) for i in range(n)]
+        elif name == "police":                          # red and blue halves swapping
+            red_first = int(t * 4) % 2 == 0
+            return [((255, 0, 0) if (i < n // 2) == red_first else (0, 40, 255)) for i in range(n)]
+        elif name == "heartbeat":                       # lub-dub
+            ph = t % 1.0
+            lvl = 1.0 if ph < 0.1 else (0.25 if ph < 0.2 else (0.8 if ph < 0.3 else 0.08))
+            return [_scale((255, 0, 40), lvl)] * n
+        elif name == "sparkle":
+            return _twinkle(0.25, (255, 255, 255))
     mode = cfg("LED_MODE") or "pnl"
+    col = led_colour()
+    if mode == "rainbow":
+        return [_wheel(i / n + now * 0.05) for i in range(n)]
+    if mode == "comet":
+        return _spin(now * 0.4, col, tail=7)
+    if mode == "fire":
+        return _fire()
+    if mode == "ocean":
+        return [_scale((0, 110, 255), 0.25 + 0.75 * (0.5 + 0.5 * math.sin(now * 1.6 + i * 0.8))) for i in range(n)]
+    if mode == "twinkle":
+        return _twinkle(0.04)
+    if mode == "breathe":
+        return [_scale(col, 0.1 + 0.9 * (0.5 - 0.5 * math.cos(now * 1.3)))] * n
+    if mode == "solid":
+        return [col] * n
     if mode == "pnl" and port_day_pct is not None:
         lvl = 0.25 + 0.75 * min(1.0, abs(port_day_pct) / 2.0)
         lvl *= 0.85 + 0.15 * math.sin(now * 1.5)        # a slow, gentle breath

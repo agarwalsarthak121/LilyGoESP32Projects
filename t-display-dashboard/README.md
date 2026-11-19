@@ -92,7 +92,9 @@ The original grey look:
 
 A 16-LED WS2812B (NeoPixel) ring: **5V → 5V side pin 1**, **GND → any G** (3V side pin 3 is free), **DI → GPIO 13 (5V side pin 5)**. DO stays empty. No library needed (uses the built-in `neopixel_write`).
 
-- **Normally:** a soft green/red glow for today's P&L (or a minutes clock, a light while you're at the desk, or off).
+- **Normally:** a soft green/red glow for today's P&L — or pick a minutes clock, a light while you're at the desk, slow rainbow, spinning comet, fireplace, ocean waves, twinkling stars, breathing colour, solid colour (colour picker), or off.
+- **One-off effects to try:** rainbow, party strobe, police, heartbeat, sparkle.
+- **Brightness:** − / + buttons and 5–60% presets at the top of `/leds`, applied at once.
 - **Flashes:** red for a wicket, green spin for the profit bell, gold/red for target/stop-loss, blue breathing for the break reminder, a warm wipe when you sit down.
 - Dark while you're away and at night. Brightness capped at 25% (max 60%): 16 LEDs at full white draw about 1 A.
 - **http://board:8080/leds** — try every effect, pick the idle mode, switch events on/off.
