@@ -2546,6 +2546,10 @@ EXTRA["pet"] = pet_screen
 # Tasks you manage at http://<board>:8080/todo, shown on the board. Kept in NVM.
 # Each task: [id, text, done, high priority, due "YYYY-MM-DD" or ""].
 TODO_NVM = 3200
+# Desk timeline (presence sensor): 35 days x 44 bytes, just before the Ask AI answer
+TL_DAYS = 35
+TL_REC = 44          # 2 bytes day number, 36 bytes at-the-desk bits (288 x 5 min), 6 bytes sensor-on bits (48 x 30 min)
+TL_NVM = len(microcontroller.nvm) - 1200 - TL_DAYS * TL_REC
 TODO_ROWS = 5
 TODO_PAGE_SECONDS = 6
 
@@ -2563,7 +2567,7 @@ def _todo_load():
 
 def todo_save(items):
     b = json.dumps(items).encode()
-    room = len(microcontroller.nvm) - 1200 - TODO_NVM - 2      # the last 1200 bytes hold the Ask AI answer
+    room = TL_NVM - TODO_NVM - 2      # after it: the desk timeline, then the Ask AI answer (last 1200 bytes)
     if len(b) > room:
         raise ValueError("the list is full (%d of %d bytes) - clear some done tasks" % (len(b), room))
     microcontroller.nvm[TODO_NVM:TODO_NVM + 2 + len(b)] = bytes([len(b) & 255, len(b) >> 8]) + b
@@ -5576,7 +5580,7 @@ def home(request: Request):
                 '<p><button style="padding:10px 18px">Send to board</button></p></form>')
         body = PAGE % ("Status: " + kite_status, link + form)
     body = body.replace("</body>", '<p style="margin-top:32px"><a href="/todo">To-do list</a> '
-                        '<a href="/stocks">My stocks</a> <a href="/ask">Ask AI</a> <a href="/anim">Animations</a> <a href="/presence">Presence</a> <a href="/leds">LED ring</a> <a href="/settings">Settings</a></p>'
+                        '<a href="/stocks">My stocks</a> <a href="/ask">Ask AI</a> <a href="/anim">Animations</a> <a href="/presence">Presence</a> <a href="/desk">Desk time</a> <a href="/leds">LED ring</a> <a href="/settings">Settings</a></p>'
                         '<p style="margin-top:16px"><a href="/cricket" '
                         'style="background:#444">Cricket matches</a></p>'
                         '<p style="margin-top:16px"><a href="/rotate?on=%d" style="background:#444">'
@@ -6336,6 +6340,200 @@ def leds_save(request: Request):
                     content_type="text/html")
 
 
+# ------------------------------------------------------------- Desk timeline & insights page
+WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+WEEKDAYS_LONG = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+
+
+def _slot_hm(s):
+    return "%d:%02d" % (s * 5 // 60, s * 5 % 60)
+
+
+def _hour_name(h):
+    """11 -> '11 AM-12 PM', 16 -> '4-5 PM'."""
+    b = (h + 1) % 24
+    sa, sb = ("AM" if h < 12 else "PM"), ("AM" if b < 12 else "PM")
+    ha, hb = 12 if h % 12 == 0 else h % 12, 12 if b % 12 == 0 else b % 12
+    return "%d-%d %s" % (ha, hb, sb) if sa == sb else "%d %s-%d %s" % (ha, sa, hb, sb)
+
+
+def _mins(m):
+    m = int(m)
+    return "%dh %02dm" % (m // 60, m % 60) if m >= 60 else "%d min" % m
+
+
+def _bar(pres, known, height=18):
+    """A 24-hour bar: green = at the desk, grey = away, blank = no data."""
+    parts, s = [], 0
+    while s < 288:
+        st = 2 if pres[s] else (1 if known[s] else 0)
+        e = s
+        while e < 288 and (2 if pres[e] else (1 if known[e] else 0)) == st:
+            e += 1
+        col = ("transparent", "#3a3f47", "#2fbf71")[st]
+        parts.append("<i style='width:%.3f%%;background:%s'></i>" % ((e - s) * 100 / 288, col))
+        s = e
+    return "<div class=bar style='height:%dpx'>%s</div>" % (height, "".join(parts))
+
+
+def desk_stats(days):
+    """Numbers for a list of (day, pres, known)."""
+    st = {"n": len(days), "total": 0, "per_day": [], "hour_p": [0] * 24, "hour_k": [0] * 24,
+          "wd_min": [0] * 7, "wd_n": [0] * 7, "starts": [], "ends": [], "longest": (0, None, None, None)}
+    for d, pres, known in days:
+        m = sum(pres) * 5
+        st["total"] += m
+        st["per_day"].append((d, m))
+        wd = day_date(d).tm_wday
+        st["wd_min"][wd] += m
+        st["wd_n"][wd] += 1
+        for sl in range(288):
+            if known[sl]:
+                st["hour_k"][sl // 12] += 1
+                if pres[sl]:
+                    st["hour_p"][sl // 12] += 1
+        runs = tl_sittings(pres)
+        if runs:
+            st["starts"].append(runs[0][0])
+            st["ends"].append(runs[-1][1])
+            for a, b in runs:
+                if (b - a + 1) * 5 > st["longest"][0]:
+                    st["longest"] = ((b - a + 1) * 5, d, a, b)
+    return st
+
+
+def _median(xs):
+    xs = sorted(xs)
+    return xs[len(xs) // 2] if xs else None
+
+
+def desk_insights(st, prev=None):
+    """Plain-English findings."""
+    out = []
+    if not st["n"]:
+        return ["No data yet. The timeline fills in while the presence sensor is working."]
+    avg = st["total"] / st["n"]
+    line = "At the desk %s a day on average (%s in total, %d day%s with data)." % (
+        _mins(avg), _mins(st["total"]), st["n"], "" if st["n"] == 1 else "s")
+    if prev and prev["n"]:
+        pavg = prev["total"] / prev["n"]
+        if pavg:
+            line += " That's %+d%% vs the week before." % round((avg - pavg) * 100 / pavg)
+    out.append(line)
+    a, b = _median(st["starts"]), _median(st["ends"])
+    if a is not None:
+        out.append("You usually sit down around %s and finish around %s." % (_slot_hm(a), _slot_hm(b + 1)))
+    pct = [(st["hour_p"][h] * 100 // st["hour_k"][h], h) for h in range(24) if st["hour_k"][h] >= 6]
+    if pct:
+        top = sorted(pct, reverse=True)[:3]
+        top = [x for x in top if x[0] > 0]
+        if top:
+            out.append("Most active: " + ", ".join("%s (%d%%)" % (_hour_name(h), p) for p, h in top) + ".")
+        if a is not None:
+            lo_h, hi_h = a // 12, b // 12
+            inside = [x for x in pct if lo_h < x[1] < hi_h]
+            if inside:
+                p, h = min(inside)
+                out.append("Quietest hour inside your usual day: %s (%d%% at the desk)." % (_hour_name(h), p))
+    wd = [(st["wd_min"][i] / st["wd_n"][i], i) for i in range(7) if st["wd_n"][i]]
+    if len(wd) >= 2:
+        hi, lo = max(wd), min(wd)
+        out.append("Busiest day: %s (%s on average). Lightest: %s (%s)." % (
+            WEEKDAYS_LONG[hi[1]], _mins(hi[0]), WEEKDAYS_LONG[lo[1]], _mins(lo[0])))
+    m, d, x, y = st["longest"]
+    if d is not None:
+        t = day_date(d)
+        out.append("Longest sitting: %s on %s %d %s, %s-%s." % (
+            _mins(m), WEEKDAYS[t.tm_wday], t.tm_mday, MONTHS[t.tm_mon - 1], _slot_hm(x), _slot_hm(y + 1)))
+    return out
+
+
+DESK_CSS = """<style>body{font-family:sans-serif;background:#111;color:#ddd;padding:14px;max-width:760px;margin:auto}
+a{color:#8ab4f8}.bar{display:flex;background:#1b1d21;border-radius:4px;overflow:hidden;width:100%%}
+.bar i{display:block;height:100%%}.row{display:flex;align-items:center;gap:8px;margin:3px 0}
+.row b{width:58px;font-weight:normal;font-size:13px;color:#aaa}.row span{width:62px;text-align:right;font-size:13px}
+.ax{display:flex;justify-content:space-between;font-size:11px;color:#777;margin-left:66px;margin-right:70px}
+.tabs a{margin-right:10px;padding:5px 12px;border-radius:14px;background:#2a2d33;text-decoration:none}
+.tabs a.on{background:#2fbf71;color:#111}.cols{display:flex;align-items:flex-end;gap:2px;height:110px}
+.cols div{flex:1;background:#2fbf71;border-radius:2px 2px 0 0;min-height:1px}
+.lab{display:flex;gap:2px;font-size:10px;color:#777}.lab div{flex:1;text-align:center}
+li{margin:5px 0}.note{color:#999;font-size:13px}</style>"""
+
+
+@server.route("/desk")
+def desk_page(request: Request):
+    rng = request.query_params.get("range", safe=False) or "week"
+    n = 30 if rng == "month" else 7
+    days = tl_history(n + 1)                   # today plus the n days before it
+    done = [x for x in days if x[0] != tl_day]  # insights use whole days only
+    done = done[-n:]
+    prev = desk_stats([x for x in tl_history(15) if x[0] < tl_day - 7]) if n == 7 and tl_day else None
+    st = desk_stats(done)
+    h = ["<!doctype html><html><head><meta name=viewport content='width=device-width'><title>Desk time</title>",
+         DESK_CSS % (), "</head><body><h2>Desk timeline</h2>"]
+    if not tl_ok:
+        h.append("<p class=note>The timeline isn't being saved: an old, long to-do list still uses that memory. "
+                 "Clear some done tasks on the To-do page and restart.</p>")
+    # today
+    today = [x for x in days if x[0] == tl_day]
+    h.append("<h3>Today</h3>")
+    if today:
+        _, pres, known = today[0]
+        h.append(_bar(pres, known, 26))
+        h.append("<div class=ax style='margin:0'><span>0</span><span>6</span><span>12</span><span>18</span><span>24</span></div>")
+        runs = tl_sittings(pres)
+        h.append("<p>At the desk %s so far.</p><ul>" % _mins(sum(pres) * 5))
+        h.append("".join("<li>%s-%s &nbsp; <span class=note>%s</span></li>" % (
+            _slot_hm(a), _slot_hm(b + 1), _mins((b - a + 1) * 5)) for a, b in runs) or "<li class=note>No sittings yet.</li>")
+        h.append("</ul>")
+    else:
+        h.append("<p class=note>Nothing recorded yet today.</p>")
+    # range
+    h.append("<p class=tabs><a href='/desk?range=week'%s>Last 7 days</a><a href='/desk?range=month'%s>Last 30 days</a></p>"
+             % (" class=on" if n == 7 else "", " class=on" if n == 30 else ""))
+    h.append("<h3>What stands out</h3><ul>%s</ul>" % "".join("<li>%s</li>" % esc(x) for x in desk_insights(st, prev)))
+    h.append("<h3>Day by day</h3><div class=ax><span>0</span><span>6</span><span>12</span><span>18</span><span>24</span></div>")
+    for d, pres, known in reversed(days):
+        t = day_date(d)
+        h.append("<div class=row><b>%s %d</b>%s<span>%s</span></div>" % (
+            WEEKDAYS[t.tm_wday], t.tm_mday, _bar(pres, known), _mins(sum(pres) * 5)))
+    if not days:
+        h.append("<p class=note>No days recorded yet.</p>")
+    # hour profile
+    if st["n"]:
+        h.append("<h3>When you're at the desk (by hour)</h3><p class=note>Share of each hour you were at the desk, "
+                 "counting only time the sensor was on.</p><div class=cols>")
+        for hr in range(24):
+            k = st["hour_k"][hr]
+            p = st["hour_p"][hr] * 100 // k if k else 0
+            h.append("<div title='%s: %d%%' style='height:%d%%'></div>" % (_hour_name(hr), p, max(p, 1)))
+        h.append("</div><div class=lab>%s</div>" % "".join("<div>%s</div>" % (hr if hr % 3 == 0 else "") for hr in range(24)))
+        h.append("<h3>By weekday (average)</h3>")
+        mx = max([st["wd_min"][i] / st["wd_n"][i] for i in range(7) if st["wd_n"][i]] or [1]) or 1
+        for i in range(7):
+            if st["wd_n"][i]:
+                v = st["wd_min"][i] / st["wd_n"][i]
+                h.append("<div class=row><b>%s</b><div class=bar style='height:14px'><i style='width:%d%%;background:#2fbf71'>"
+                         "</i></div><span>%s</span></div>" % (WEEKDAYS[i], v * 100 / mx, _mins(v)))
+    h.append("<p class=note>Kept on the board for %d days, in 5-minute steps. Grey = away, blank = no data "
+             "(board off or sensor off). <a href='/desk.csv'>Download as CSV</a></p>" % TL_DAYS)
+    h.append("<p><a href='/presence'>Presence sensor</a> &nbsp; <a href='/'>Back</a></p></body></html>")
+    return Response(request, "".join(h), content_type="text/html")
+
+
+@server.route("/desk.csv")
+def desk_csv(request: Request):
+    rows = ["date,weekday,desk_minutes,first,last,sittings,longest_minutes"]
+    for d, pres, known in tl_history(TL_DAYS):
+        t = day_date(d)
+        runs = tl_sittings(pres)
+        rows.append("%d-%02d-%02d,%s,%d,%s,%s,%d,%d" % (
+            t.tm_year, t.tm_mon, t.tm_mday, WEEKDAYS[t.tm_wday], sum(pres) * 5,
+            _slot_hm(runs[0][0]) if runs else "", _slot_hm(runs[-1][1] + 1) if runs else "",
+            len(runs), max([(b - a + 1) * 5 for a, b in runs] or [0])))
+    return Response(request, "\n".join(rows) + "\n", content_type="text/csv")
+
+
 # ------------------------------------------------------------- Presence sensor page
 PRES_PAGE = """<!doctype html><html><head><meta name=viewport content="width=device-width">
 <title>Presence sensor</title><style>
@@ -6373,6 +6571,7 @@ pre{background:#1a1a1a;padding:10px;border-radius:8px;font-size:13px;white-space
 <a href="/presence/hello">Test the white wire</a><br>
 <small>Your chair should sit between the two. Something right next to the sensor (a charger, cables)
 that keeps it saying "someone there": ignore the first 0.7 m and put the sensor 1 m or more from your seat.</small></p>
+<p><a href="/desk">Desk timeline and weekly / monthly insights</a></p>
 <p><a href="/presence/summary">Today's desk summary</a> (sent to your phone at night)</p>
 <p><a href="/presence/scan">Find the sensor wires (pin scan)</a></p>
 <p><a href="/settings#presence">Presence settings</a> &nbsp; <a href="/">Back</a></p>
@@ -7677,6 +7876,128 @@ def summary_tick(now):
         summary_retry_at = now + 300
 
 
+# ---- desk timeline: which 5-minute slots you were at the desk, day by day (35 days kept in NVM)
+tl_ok = True                 # False if an old, long to-do list still occupies that part of NVM
+try:
+    _n = microcontroller.nvm[TODO_NVM] | (microcontroller.nvm[TODO_NVM + 1] << 8)
+    if TL_NVM - TODO_NVM - 2 < _n <= len(microcontroller.nvm) - TODO_NVM - 2:
+        tl_ok = False
+except Exception:  # noqa: BLE001
+    tl_ok = False
+tl_day = None                # day number of the record held in RAM
+tl_rec = None                # that record (bytearray of TL_REC)
+tl_key = None                # (year, yday) the day number was worked out for
+tl_slot = -1
+tl_slot_here = 0.0
+tl_dirty = False
+tl_saved_at = 0.0
+
+
+def _dayno(t):
+    return int(time.mktime(time.struct_time((t.tm_year, t.tm_mon, t.tm_mday, 12, 0, 0, 0, -1, -1))) // 86400)
+
+
+def day_date(d):
+    """Day number -> struct_time of that day (noon)."""
+    return time.localtime(d * 86400 + 43200)
+
+
+def tl_read(d):
+    """The stored record for day number d, or None."""
+    if not tl_ok:
+        return None
+    off = TL_NVM + (d % TL_DAYS) * TL_REC
+    rec = bytearray(microcontroller.nvm[off:off + TL_REC])
+    return rec if (rec[0] | (rec[1] << 8)) == (d & 0xFFFF) else None
+
+
+def tl_flush(force=False):
+    global tl_dirty, tl_saved_at
+    if not (tl_ok and tl_dirty and tl_rec is not None):
+        return
+    if not force and time.monotonic() - tl_saved_at < 600:
+        return
+    try:
+        off = TL_NVM + (tl_day % TL_DAYS) * TL_REC
+        microcontroller.nvm[off:off + TL_REC] = tl_rec
+        tl_dirty, tl_saved_at = False, time.monotonic()
+    except Exception as e:  # noqa: BLE001
+        log_err("desk timeline save: %r" % (e,))
+
+
+def tl_tick(dt, here, sensor_ok):
+    """Every pass: mark this 5-minute slot as at-the-desk once you've been there 90 s of it."""
+    global tl_day, tl_rec, tl_key, tl_slot, tl_slot_here, tl_dirty
+    t = time.localtime()
+    if t.tm_year < 2024:
+        return
+    key = (t.tm_year, t.tm_yday)
+    if key != tl_key:
+        d = _dayno(t)
+        if d != tl_day:
+            tl_flush(force=True)                     # finish yesterday
+            tl_rec = tl_read(d)
+            if tl_rec is None:
+                tl_rec = bytearray(TL_REC)
+                tl_rec[0], tl_rec[1] = d & 255, (d >> 8) & 255
+                tl_dirty = True
+            tl_day, tl_slot = d, -1
+        tl_key = key
+    slot = (t.tm_hour * 60 + t.tm_min) // 5
+    if slot != tl_slot:
+        tl_slot, tl_slot_here = slot, 0.0
+    if sensor_ok:
+        h = slot // 6
+        if not tl_rec[38 + h // 8] & (1 << (h % 8)):
+            tl_rec[38 + h // 8] |= 1 << (h % 8)
+            tl_dirty = True
+    if here:
+        tl_slot_here += dt
+        if tl_slot_here >= 90 and not tl_rec[2 + slot // 8] & (1 << (slot % 8)):
+            tl_rec[2 + slot // 8] |= 1 << (slot % 8)
+            tl_dirty = True
+    tl_flush()
+
+
+def tl_bits(rec):
+    """(at the desk, sensor on) as two lists of 288 booleans."""
+    pres = [bool(rec[2 + s // 8] & (1 << (s % 8))) for s in range(288)]
+    known = [bool(rec[38 + (s // 6) // 8] & (1 << ((s // 6) % 8))) for s in range(288)]
+    return pres, known
+
+
+def tl_history(ndays):
+    """[(day number, at-desk bits, sensor-on bits)] for the last ndays (oldest first), days with data only."""
+    out = []
+    if tl_day is None:
+        return out
+    for d in range(tl_day - ndays + 1, tl_day + 1):
+        rec = tl_rec if d == tl_day else tl_read(d)
+        if rec is None:
+            continue
+        pres, known = tl_bits(rec)
+        if any(known):
+            out.append((d, pres, known))
+    return out
+
+
+def tl_sittings(pres):
+    """[(first slot, last slot)] runs of at-the-desk slots; a single 5-minute gap doesn't split a sitting."""
+    runs, start, gap = [], None, 0
+    for s in range(289):
+        p = s < 288 and pres[s]
+        if p:
+            if start is None:
+                start = s
+            gap, last = 0, s
+        elif start is not None:
+            gap += 1
+            if gap > 1:
+                runs.append((start, last))
+                start, gap = None, 0
+    return runs
+
+
 def pres_tick(now):
     """Every pass of the main loop: read the sensor, count desk time, sleep or wake the screen."""
     global pres_level, pres_seen, pres_here, pres_last_here, pres_changed, pres_session, \
@@ -7711,6 +8032,10 @@ def pres_tick(now):
             day_log[4] = mnow
     day_save()
     summary_tick(now)
+    try:
+        tl_tick(dt, here and pres_on(), pres_on() and pres_seen)
+    except Exception as e:  # noqa: BLE001
+        log_err("desk timeline: %r" % (e,))
     if not pres_on():
         pres_here = here
         pres_wake(now)

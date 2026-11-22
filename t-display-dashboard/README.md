@@ -128,6 +128,10 @@ If the sensor ever goes quiet (stuck in configuration mode), the board notices: 
 
 **Daily summary:** at **23:00** (Settings → *Daily desk summary to ntfy at*; blank = off) the board sends your ntfy topic a summary of the day: time at the desk, time away between your first arrival and 23:00, number of sittings and the longest one, and break reminders. The day's numbers are saved every 10 minutes, so a restart keeps them. `/presence/summary` shows today's so far and can send it now.
 
+**Desk timeline:** the board records which 5-minute slots you were at the desk (90 s or more of the slot), and keeps the last 35 days in its memory. **http://board:8080/desk** shows today's sittings, a day-by-day timeline (green = at the desk, grey = away, blank = no data), an hour-of-day profile, weekday averages and plain-English insights for the last 7 or 30 days: average desk time (and vs the week before), usual start and finish, most active hours, the quietest hour inside your usual day, busiest/lightest weekday and the longest sitting. `/desk.csv` downloads a row per day. Today is left out of the averages until it's over.
+
+![Desk timeline](docs/desk-timeline.png)
+
 **Fixed objects:** something right next to the sensor (a wireless charger, cables) can read as a person all the time, at the same distance. A person's reading always wobbles, so a reading that stays within 2 for *Ignore a reading that hasn't moved for* seconds (default 60) is learnt as a fixed object and ignored. A reading outside that band counts as a person again at once.
 
 **http://board:8080/presence** is a live test page. It shows the OT2 pin, the sensor's serial lines, the distance, and when the screen will turn off. The screen never turns off until the sensor has seen someone at least once, so an unplugged sensor can't blank the screen.
