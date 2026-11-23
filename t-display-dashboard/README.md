@@ -94,6 +94,7 @@ A second ESP32 on the same Wi-Fi with a DHT22, an LDR light sensor and a touch p
 
 - **Weather screen:** the second line shows the room, e.g. *Room 21.2° 72%* (low/high moves onto the *Feels* line).
 - **Dark room:** when the light sensor says Dark, the LED ring becomes the night light (night-light colour and brightness), even in the day. Switch on the LED ring page. A number reading needs a rule on `/room`, e.g. `>3000`.
+- **Touch gestures:** the room board sends single tap / double tap / long press to `/room/tap` the moment they happen (sketch in [`room-sensors/`](../room-sensors)); the 5-second reading catches any that got lost. For now the LED ring blinks to confirm (1 blink, 2 blinks, a fading glow) and `/room` shows the last gesture and counts.
 - If the board stops answering, the LilyGO backs off (10 s, 20 s, 40 s ... up to 5 minutes between tries) and the weather screen goes back to low/high.
 
 ![Weather screen with room readings](docs/weather-room.png)

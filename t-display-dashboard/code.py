@@ -4045,6 +4045,25 @@ room_err = ""
 room_fails = 0
 room_next = 0.0
 room_taps_new = 0            # taps seen since the LilyGO started
+# Touch gestures from the room board: it sends each one the moment it happens (/room/tap), and
+# the 5-second reading of /data catches any that got lost (same number = already handled).
+ROOM_GESTURES = {"single": "Single tap", "double": "Double tap", "long": "Long press"}
+room_gseq = None             # number of the last gesture handled
+room_glast = None            # (gesture, monotonic time, "instant" / "check")
+room_gcount = {"single": 0, "double": 0, "long": 0}
+
+
+def room_gesture(g, seq, how):
+    """A touch gesture from the room board. For now: count it and blink the LED ring to confirm."""
+    global room_gseq, room_glast, led_fx
+    if seq is not None and seq == room_gseq:
+        return                                   # already handled
+    room_gseq = seq
+    room_glast = (g, time.monotonic(), how)
+    room_gcount[g] = room_gcount.get(g, 0) + 1
+    log_err("room touch: %s (%s)" % (ROOM_GESTURES.get(g, g), how))
+    if (cfg("LED_TAPFX") or "on") != "off":
+        led_fx = ("tap_" + g, time.monotonic())   # quick blink(s) on the ring so you see it arrived
 
 
 def room_url():
@@ -4100,9 +4119,18 @@ def _dark_from(key, v):
 
 def _room_from_json(d):
     f = _flatten(d)
-    r = {"t": None, "h": None, "dark": None, "light": None, "touch": None, "taps": None}
+    r = {"t": None, "h": None, "dark": None, "light": None, "touch": None, "taps": None,
+         "gesture": None, "seq": None}
     for k, v in f.items():
         leaf = k.split(".")[-1]
+        if leaf == "gesture" and isinstance(v, str):
+            r["gesture"] = v
+            continue
+        if leaf == "seq" and _num_or_none(v) is not None:
+            r["seq"] = int(_num_or_none(v))
+            continue
+        if leaf in ("gesture_age", "singles", "doubles", "longs", "sent", "rssi", "uptime", "led"):
+            continue
         if r["taps"] is None and leaf in ("taps", "tap_count", "touch_count", "touches", "count") \
                 and _num_or_none(v) is not None:
             r["taps"] = int(_num_or_none(v))
@@ -4201,6 +4229,11 @@ def get_room():
                 d = r["taps"] - room["taps"]
                 room_taps_new += d if d > 0 else (r["taps"] if d < 0 else 0)   # < 0: the board restarted
             room, room_path, room_err, room_fails = r, p, "", 0
+            if r.get("seq") is not None:                 # a gesture the instant message didn't deliver
+                if room_gseq is None:
+                    globals()["room_gseq"] = r["seq"]    # first look after start: don't replay old taps
+                elif r["seq"] != room_gseq and r.get("gesture") in ROOM_GESTURES:
+                    room_gesture(r["gesture"], r["seq"], "check")
             room_next = time.monotonic() + ROOM_EVERY
             return
     room_err = last
@@ -6436,6 +6469,17 @@ def todo_do(request: Request):
 
 
 # ------------------------------------------------------------- Room sensors page
+@server.route("/room/tap")
+def room_tap(request: Request):
+    """The room board calls this the moment the touch pad is tapped: ?g=single|double|long&n=<number>."""
+    g = (request.query_params.get("g", safe=False) or "").lower()
+    n = request.query_params.get("n", safe=False)
+    if g not in ROOM_GESTURES:
+        return Response(request, "unknown gesture", content_type="text/plain")
+    room_gesture(g, int(n) if n and n.isdigit() else None, "instant")
+    return Response(request, "ok", content_type="text/plain")
+
+
 @server.route("/room")
 def room_page(request: Request):
     q = request.query_params
@@ -6460,6 +6504,15 @@ def room_page(request: Request):
             ("Touching now" if room["touch"] is True or str(room["touch"]).lower() in ("true", "1") else "Idle") +
             ("" if room.get("taps") is None else " &middot; <b>%d</b> taps on the board (%d since the LilyGO started)" % (
                 room["taps"], room_taps_new)))
+        if room_glast:
+            g, at, how = room_glast
+            rows += ("<p>Last gesture: <b>%s</b>, %d s ago <small>(%s)</small><br>Since the LilyGO started: "
+                     "%d single, %d double, %d long</p>") % (
+                ROOM_GESTURES.get(g, g), int(time.monotonic() - at),
+                "arrived instantly" if how == "instant" else "caught by the 5-second check - the instant message didn't arrive",
+                room_gcount["single"], room_gcount["double"], room_gcount["long"])
+        else:
+            rows += "<p>No touch gestures yet. Tap, double-tap or hold the pad: the LED ring blinks when one arrives.</p>"
         if room["dark"] is None and room["light"] is not None:
             rows += ("<p>The light reading is a number, so tell the board which way is dark: e.g. "
                      "<b>&gt;3000</b> (dark when above 3000) or <b>&lt;20</b> (dark when below 20).</p>")
@@ -6517,6 +6570,7 @@ def leds_page(request: Request):
             "<label><input type=checkbox name=LED_NIGHTLIGHT value=on%s>In night mode, glow as a night light "
             "(stays on even when you're away from the desk)</label>"
             "<label>Night-light colour <input type=color name=LED_NCOLOR value='#%02x%02x%02x'></label>"
+            "<label><input type=checkbox name=LED_TAPFX value=on%s>Blink when the room board's touch pad is tapped</label>"
             "<label><input type=checkbox name=LED_DARKROOM value=on%s>Also when the room goes dark "
             "(light sensor on the <a href='/room'>room board</a>)</label>"
             "<label><input type=checkbox name=LED_NIGHT value=on%s>Also flash for wickets and alerts at night</label>"
@@ -6529,6 +6583,7 @@ def leds_page(request: Request):
         bright, tests, modes, led_colour()[0], led_colour()[1], led_colour()[2], evs,
         "" if (cfg("LED_NIGHTLIGHT") or "on") == "off" else " checked",
         led_ncolour()[0], led_ncolour()[1], led_ncolour()[2],
+        "" if (cfg("LED_TAPFX") or "on") == "off" else " checked",
         "" if (cfg("LED_DARKROOM") or "on") == "off" else " checked",
         "" if (cfg("LED_NIGHT") or "off") == "off" else " checked", esc(str(cfg("LED_PIN") or "13")),
         _num(cfg("LED_COUNT") or "16", 1, 60, 16))
@@ -6575,6 +6630,7 @@ def leds_save(request: Request):
     CFG["LED_NIGHT"] = "on" if g("LED_NIGHT") else "off"
     CFG["LED_NIGHTLIGHT"] = "on" if g("LED_NIGHTLIGHT") else "off"
     CFG["LED_DARKROOM"] = "on" if g("LED_DARKROOM") else "off"
+    CFG["LED_TAPFX"] = "on" if g("LED_TAPFX") else "off"
     nc = (g("LED_NCOLOR") or "").lstrip("#").lower()
     if len(nc) == 6 and all(ch in "0123456789abcdef" for ch in nc):
         CFG["LED_NCOLOR"] = "#" + nc
@@ -8364,7 +8420,7 @@ LED_EVENTS = (("WICKET", "Wicket: red flash"), ("PROFIT", "Profit bell: green sp
               ("HELLO", "Welcome back when you sit down"))
 LED_FX_SECS = {"wicket": 3.0, "profit": 3.0, "sl": 3.0, "target": 3.0, "break": 8.0, "hello": 2.0,
                "rainbow": 6.0, "party": 5.0, "police": 5.0, "heartbeat": 5.0, "sparkle": 5.0,
-               "nightlight": 10.0}
+               "nightlight": 10.0, "tap_single": 0.35, "tap_double": 0.7, "tap_long": 1.0}
 led_tw = []                  # twinkle / sparkle brightness per LED
 
 
@@ -8546,6 +8602,12 @@ def led_frame(now):
             return [_scale((255, 0, 40), lvl)] * n
         elif name == "sparkle":
             return _twinkle(0.25, (255, 255, 255))
+        elif name == "tap_single":                      # one white blink
+            return [(255, 255, 255)] * n if t < 0.2 else [(0, 0, 0)] * n
+        elif name == "tap_double":                      # two white blinks
+            return [(255, 255, 255)] * n if (t < 0.15 or 0.35 < t < 0.5) else [(0, 0, 0)] * n
+        elif name == "tap_long":                        # a white glow that fades
+            return [_scale((255, 255, 255), max(0.0, 1.0 - t))] * n
     mode = cfg("LED_MODE") or "pnl"
     col = led_colour()
     if mode == "rainbow":

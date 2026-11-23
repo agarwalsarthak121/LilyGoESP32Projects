@@ -56,3 +56,7 @@ python tools/mkfont.py Inter-Bold.otf 24 all news24.bdf && bdftopcf -o news24.pc
 ```
 
 Modes: `digits`, `money` (digits plus ₹ and signs), `all` (printable ASCII plus ° and ₹).
+
+## room-sensors
+
+Second board (ESP32, Arduino): DHT22, LDR and touch pad, feeding the dashboard over Wi-Fi. See [room-sensors/README.md](room-sensors/README.md).
