@@ -88,6 +88,16 @@ The original grey look:
 
 **Profit bell:** the buzzer rings once when a stock in My stocks goes above **₹1,000 profit** (Settings → Sound; change the amount or untick it). It rings again only after that stock's profit has dropped below 90% of the amount, so a P&L hovering around the line doesn't keep ringing, and stocks already above it when the board starts stay quiet. It also sends an ntfy notification to your phone (untick *...and send a notification* to turn that off). Target and stop-loss alerts are unchanged.
 
+## Room sensors (second ESP32, optional)
+
+A second ESP32 on the same Wi-Fi with a DHT22, an LDR light sensor and a touch pad, serving its readings at `http://192.168.1.16` (change the address at **http://board:8080/room**). Every 30 s the LilyGO reads it: it tries the usual JSON addresses (`/data`, `/api`, `/json`, `/sensors`, ...) and falls back to reading the values off the board's page.
+
+- **Weather screen:** the second line shows the room, e.g. *Room 21.2° 72%* (low/high moves onto the *Feels* line).
+- **Dark room:** when the light sensor says Dark, the LED ring becomes the night light (night-light colour and brightness), even in the day. Switch on the LED ring page. A number reading needs a rule on `/room`, e.g. `>3000`.
+- If the board stops answering, the LilyGO backs off (up to 10 minutes between tries) and the weather screen goes back to low/high.
+
+![Weather screen with room readings](docs/weather-room.png)
+
 ## LED ring (optional)
 
 A 16-LED WS2812B (NeoPixel) ring: **5V → 5V side pin 1**, **GND → any G** (3V side pin 3 is free), **DI → GPIO 13 (5V side pin 5)**. DO stays empty. No library needed (uses the built-in `neopixel_write`).

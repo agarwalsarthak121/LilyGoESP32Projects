@@ -4025,6 +4025,198 @@ def get_weather():
         WMO.get(cur["weather_code"], "Weather"), cur["apparent_temperature"],
         cur["pressure_msl"])
     th_weather(cur, d)
+    global wx_base, wx_nums
+    vals = [t for t in d["hourly"]["temperature_2m"] if t is not None][-24:]
+    wx_nums = (cur["apparent_temperature"], min(vals) if vals else None, max(vals) if vals else None)
+    wx_base = (lbl_feels.text, lbl_range.text)
+    wx_text()
+
+
+# ---- room sensors: a second ESP32 on the network (DHT22 temperature/humidity, LDR, touch).
+# The weather screen shows the room's temperature and humidity; a dark room turns the LED
+# ring into a night light. Page: http://<board>:8080/room
+ROOM_PATHS = ("/data", "/api", "/json", "/sensors", "/api/sensors", "/api/data", "/status", "/readings", "/sensor")
+wx_base = None               # (feels line, low/high line) as the weather update wrote them
+wx_nums = None               # (feels like, low, high)
+room = None                  # {"t", "h", "dark", "light", "touch", "at"}
+room_path = None             # where the readings were found
+room_err = ""
+room_fails = 0
+room_next = 0.0
+
+
+def room_url():
+    return (str(cfg("ROOM_URL") or "http://192.168.1.16").strip() or "").rstrip("/")
+
+
+def room_fresh():
+    return room is not None and time.monotonic() - room["at"] < 180
+
+
+def room_dark():
+    """True when the room sensor says it's dark (and the reading is recent)."""
+    return room_fresh() and room.get("dark") is True
+
+
+def _num_or_none(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _flatten(d, pre="", out=None):
+    out = {} if out is None else out
+    if isinstance(d, dict):
+        for k, v in d.items():
+            _flatten(v, (pre + "." if pre else "") + str(k).lower(), out)
+    else:
+        out[pre] = d
+    return out
+
+
+def _dark_from(key, v):
+    """Work out dark / not dark from one reading."""
+    if isinstance(v, bool):
+        return v if "dark" in key else not v
+    if isinstance(v, str):
+        w = v.lower()
+        if "dark" in w or w in ("night", "low", "off"):
+            return True if "not" not in w else False
+        if "bright" in w or "light" in w or w in ("day", "high", "on"):
+            return False
+        return None
+    n = _num_or_none(v)
+    rule = str(cfg("ROOM_DARK_RULE") or "").replace(" ", "")      # e.g. ">3000" or "<20"
+    if n is None or len(rule) < 2 or rule[0] not in "<>":
+        return None
+    lim = _num_or_none(rule[1:])
+    if lim is None:
+        return None
+    return n > lim if rule[0] == ">" else n < lim
+
+
+def _room_from_json(d):
+    f = _flatten(d)
+    r = {"t": None, "h": None, "dark": None, "light": None, "touch": None}
+    for k, v in f.items():
+        leaf = k.split(".")[-1]
+        if r["t"] is None and "temp" in leaf and _num_or_none(v) is not None and "unit" not in leaf \
+                and not leaf.endswith("_f") and "fahr" not in leaf:
+            r["t"] = _num_or_none(v)
+        elif r["h"] is None and "hum" in leaf and _num_or_none(v) is not None:
+            r["h"] = _num_or_none(v)
+        elif any(w in leaf for w in ("dark", "light", "ldr", "lux", "bright")):
+            d = _dark_from(leaf, v)
+            if r["light"] is None or (r["dark"] is None and d is not None):    # prefer a clear Dark/Bright
+                r["light"], r["dark"] = v, d
+        elif r["touch"] is None and "touch" in leaf:
+            r["touch"] = v
+    return r
+
+
+def _num_before(text, i):
+    """The number written just before position i ('21.2 °C' -> 21.2)."""
+    j = i
+    while j > 0 and text[j - 1] in " \t":
+        j -= 1
+    k = j
+    while k > 0 and (text[k - 1].isdigit() or text[k - 1] in ".-"):
+        k -= 1
+    return _num_or_none(text[k:j])
+
+
+def _room_from_html(html):
+    """Read the values straight off the board's page (when it doesn't offer JSON)."""
+    r = {"t": None, "h": None, "dark": None, "light": None, "touch": None}
+    i = html.find("\u00b0C")
+    if i < 0:
+        i = html.find("&deg;C")
+    if i >= 0:
+        r["t"] = _num_before(html, i)
+    j = html.lower().find("humidity")
+    if j >= 0:
+        k = html.find("%", j)
+        if k > 0:
+            r["h"] = _num_before(html, k)
+    low = html.lower()
+    j = low.find("light")
+    if j >= 0:
+        seg = low[j:j + 200]
+        if ">dark" in seg:
+            r["dark"], r["light"] = True, "Dark"
+        elif ">bright" in seg or ">light<" in seg:
+            r["dark"], r["light"] = False, "Bright"
+    return r
+
+
+def _room_get(path):
+    with requests.get(room_url() + path, timeout=4) as resp:
+        if resp.status_code != 200:
+            return None
+        body = resp.text[:6000]
+    b = body.lstrip()
+    if b[:1] in "{[":
+        try:
+            r = _room_from_json(json.loads(b))
+        except ValueError:
+            return None
+    elif path == "/":
+        r = _room_from_html(body)
+    else:
+        return None
+    return r if (r["t"] is not None or r["h"] is not None or r["dark"] is not None) else None
+
+
+def get_room():
+    """Fetch the readings: from the path that worked last time, else look for one."""
+    global room, room_path, room_err, room_fails, room_next
+    url = room_url()
+    if not url or url.lower() == "off":
+        room_err = "switched off"
+        return
+    tries = [room_path] if room_path else []
+    if "/" in url.split("//", 1)[-1]:
+        tries = [""]                                 # the address already includes the path
+    else:
+        tries += [p for p in ROOM_PATHS + ("/",) if p != room_path]
+    last = "no readings found"
+    for p in tries:
+        dog()
+        try:
+            r = _room_get(p)
+        except Exception as e:  # noqa: BLE001
+            last = "%s%s: %r" % (url, p, e)
+            break                                    # the board itself isn't answering: no point trying more
+        if r:
+            r["at"] = time.monotonic()
+            room, room_path, room_err, room_fails = r, p, "", 0
+            room_next = time.monotonic() + 30
+            return
+    room_err = last
+    room_fails += 1
+    room_path = None
+    room_next = time.monotonic() + min(600, 30 * (room_fails + 1))   # back off while it's away
+
+
+def wx_text():
+    """Weather screen: with room readings, the second line shows the room instead of low/high."""
+    if wx_base is None:
+        return
+    if not room_fresh() or (room["t"] is None and room["h"] is None):
+        lbl_feels.text, lbl_range.text = wx_base
+        return
+    feels, lo, hi = wx_nums
+    t = "--" if room["t"] is None else "%.1f" % room["t"]
+    h = "--" if room["h"] is None else "%d" % round(room["h"])
+    if CLASSIC:
+        lbl_feels.text = ("FEELS %.1f C" % feels) if lo is None else "FEELS %d  %d-%d" % (
+            round(feels), round(lo), round(hi))
+        lbl_range.text = "ROOM %s C   HUM %s%%" % (t, h)
+    else:
+        lbl_feels.text = ("Feels like %d°" % round(feels)) if lo is None else "Feels %d°  %d-%d°" % (
+            round(feels), round(lo), round(hi))
+        lbl_range.text = "Room %s°  %s%%" % (t, h)
 
 
 def get_air():
@@ -5580,7 +5772,7 @@ def home(request: Request):
                 '<p><button style="padding:10px 18px">Send to board</button></p></form>')
         body = PAGE % ("Status: " + kite_status, link + form)
     body = body.replace("</body>", '<p style="margin-top:32px"><a href="/todo">To-do list</a> '
-                        '<a href="/stocks">My stocks</a> <a href="/ask">Ask AI</a> <a href="/anim">Animations</a> <a href="/presence">Presence</a> <a href="/desk">Desk time</a> <a href="/leds">LED ring</a> <a href="/settings">Settings</a></p>'
+                        '<a href="/stocks">My stocks</a> <a href="/ask">Ask AI</a> <a href="/anim">Animations</a> <a href="/presence">Presence</a> <a href="/desk">Desk time</a> <a href="/room">Room</a> <a href="/leds">LED ring</a> <a href="/settings">Settings</a></p>'
                         '<p style="margin-top:16px"><a href="/cricket" '
                         'style="background:#444">Cricket matches</a></p>'
                         '<p style="margin-top:16px"><a href="/rotate?on=%d" style="background:#444">'
@@ -6233,6 +6425,47 @@ def todo_do(request: Request):
     return _page(request, '<!doctype html><meta http-equiv="refresh" content="0;url=/todo">')
 
 
+# ------------------------------------------------------------- Room sensors page
+@server.route("/room")
+def room_page(request: Request):
+    q = request.query_params
+    if q.get("url", safe=False) is not None:
+        CFG["ROOM_URL"] = unquote(q.get("url", safe=False)).strip() or "off"
+        CFG["ROOM_DARK_RULE"] = unquote(q.get("rule", safe=False) or "").strip()
+        try:
+            save_cfg()
+        except Exception as e:  # noqa: BLE001
+            log_err("room settings save: %r" % (e,))
+        globals()["room_path"] = None
+        globals()["room_next"] = 0.0                    # look again straight away
+    if room_fresh():
+        age = int(time.monotonic() - room["at"])
+        dark = {True: "Dark", False: "Bright", None: "?"}[room["dark"]]
+        tip = "Readings from %s%s, %d s ago." % (esc(room_url()), esc(room_path or ""), age)
+        rows = ("<table><tr><td>Temperature</td><td><b>%s</b></td></tr><tr><td>Humidity</td><td><b>%s</b></td></tr>"
+                "<tr><td>Light</td><td><b>%s</b> <small>(%s)</small></td></tr><tr><td>Touch</td><td>%s</td></tr></table>") % (
+            "--" if room["t"] is None else "%.1f &deg;C" % room["t"],
+            "--" if room["h"] is None else "%d %%" % round(room["h"]),
+            dark, esc(str(room["light"])), esc(str(room["touch"])))
+        if room["dark"] is None and room["light"] is not None:
+            rows += ("<p>The light reading is a number, so tell the board which way is dark: e.g. "
+                     "<b>&gt;3000</b> (dark when above 3000) or <b>&lt;20</b> (dark when below 20).</p>")
+    else:
+        tip = "No readings yet from %s. %s" % (esc(room_url()), esc(room_err))
+        rows = ("<p>Make sure the sensor board is on and that its page opens at that address. If its readings "
+                "are at a special address (like /data), put the full address below.</p>")
+    body = rows + (
+        "<form action='/room'><label>Sensor board address <input type=text name=url value='%s' style='width:240px'>"
+        "</label><label>Dark when the light reading is <input type=text name=rule value='%s' style='width:80px'> "
+        "<small>(only for number readings: &gt;3000 or &lt;20; leave blank for Dark/Bright)</small></label>"
+        "<p><button>Save and check now</button></p></form>"
+        "<p><small>The weather screen shows the room's temperature and humidity. When the room is dark, the LED ring "
+        "becomes the night light (switch on the <a href='/leds'>LED ring</a> page).</small></p>"
+        "<p><a href='/' style='background:#444'>Back</a></p>") % (
+        esc(str(cfg("ROOM_URL") or "http://192.168.1.16")), esc(str(cfg("ROOM_DARK_RULE") or "")))
+    return Response(request, PAGE.replace("Zerodha login", "Room sensors") % (tip, body), content_type="text/html")
+
+
 # ------------------------------------------------------------- LED ring page
 @server.route("/leds")
 def leds_page(request: Request):
@@ -6268,6 +6501,8 @@ def leds_page(request: Request):
             "<label><input type=checkbox name=LED_NIGHTLIGHT value=on%s>In night mode, glow as a night light "
             "(stays on even when you're away from the desk)</label>"
             "<label>Night-light colour <input type=color name=LED_NCOLOR value='#%02x%02x%02x'></label>"
+            "<label><input type=checkbox name=LED_DARKROOM value=on%s>Also when the room goes dark "
+            "(light sensor on the <a href='/room'>room board</a>)</label>"
             "<label><input type=checkbox name=LED_NIGHT value=on%s>Also flash for wickets and alerts at night</label>"
 
             "<label>Ring on GPIO <input type=text name=LED_PIN value='%s' style='width:50px'> with "
@@ -6278,6 +6513,7 @@ def leds_page(request: Request):
         bright, tests, modes, led_colour()[0], led_colour()[1], led_colour()[2], evs,
         "" if (cfg("LED_NIGHTLIGHT") or "on") == "off" else " checked",
         led_ncolour()[0], led_ncolour()[1], led_ncolour()[2],
+        "" if (cfg("LED_DARKROOM") or "on") == "off" else " checked",
         "" if (cfg("LED_NIGHT") or "off") == "off" else " checked", esc(str(cfg("LED_PIN") or "13")),
         _num(cfg("LED_COUNT") or "16", 1, 60, 16))
     return Response(request, PAGE.replace("Zerodha login", "LED ring") % (tip, body), content_type="text/html")
@@ -6322,6 +6558,7 @@ def leds_save(request: Request):
         CFG["LED_" + k] = "on" if g("LED_" + k) else "off"
     CFG["LED_NIGHT"] = "on" if g("LED_NIGHT") else "off"
     CFG["LED_NIGHTLIGHT"] = "on" if g("LED_NIGHTLIGHT") else "off"
+    CFG["LED_DARKROOM"] = "on" if g("LED_DARKROOM") else "off"
     nc = (g("LED_NCOLOR") or "").lstrip("#").lower()
     if len(nc) == 6 and all(ch in "0123456789abcdef" for ch in nc):
         CFG["LED_NCOLOR"] = "#" + nc
@@ -8168,10 +8405,15 @@ led_prev = None
 def led_bright(night=None):
     """Day brightness, or the night-light brightness at night (0..1)."""
     if night is None:
-        night = bool(night_now) or (led_fx is not None and led_fx[0] == "nightlight")
+        night = bool(night_now) or led_dark_room() or (led_fx is not None and led_fx[0] == "nightlight")
     if night:
         return _num(cfg("LED_NBRIGHT") or "5", 1, 60, 5) / 100
     return _num(cfg("LED_BRIGHT") or "25", 1, 60, 25) / 100
+
+
+def led_dark_room():
+    """The room sensor says it's dark, and the ring should become the night light."""
+    return (cfg("LED_DARKROOM") or "on") != "off" and room_dark()
 
 
 def led_ncolour():
@@ -8331,7 +8573,7 @@ def leds_tick(now):
             leds_show([led_ncolour()] * led_n)
             return
         globals()["led_fx"] = None
-    if night_now:
+    if night_now or led_dark_room():
         if led_fx is not None:                                     # an event or a test, at night
             leds_show(led_frame(now))
         elif (cfg("LED_NIGHTLIGHT") or "on") != "off":
@@ -8423,6 +8665,11 @@ while True:
             last_cdetail = 0.0
             for _s in EXTRA_LIST:
                 _s.refresh()
+
+        if now_m > room_next:
+            room_next = now_m + 30
+            safe(get_room, "room", free=False)
+            wx_text()
 
         if now_m - last_weather > WEATHER_EVERY:
             last_weather = now_m

@@ -59,6 +59,7 @@ rtcm.RTC = RTC
 sys.modules["rtc"] = rtcm
 
 FAIL = os.environ.get("FAIL") == "1"
+ROOM = {"mode": os.environ.get("ROOM_MODE", "json"), "path": "/data", "light": "Bright", "ldr": 1200}
 class Resp:
     def __init__(self, d, raw=None, headers=None): self.d = d; self.raw = raw; self.status_code = 200; self.headers = headers or {}
     def iter_content(self, chunk_size=1024):
@@ -115,6 +116,22 @@ class Session:
             print("REQ-FAIL step %d %s" % (STEP["n"], url.split("/")[2]))
             raise OSError(113, "EHOSTUNREACH")
         print("REQ step %d %s" % (STEP["n"], url.split("/")[2]))
+        if "192.168.1.16" in url:                      # the room sensor board (ROOM["mode"]: json/html/num/down)
+            path = "/" + url.split("192.168.1.16", 1)[1].lstrip("/")
+            print("ROOM GET", path)
+            mode = ROOM["mode"]
+            if mode == "down":
+                raise OSError(116, "ETIMEDOUT")
+            if mode in ("json", "num") and path == ROOM["path"]:
+                d = {"temperature": 21.2, "humidity": 71.8, "touch": {"state": "idle", "count": 4}, "uptime": 462}
+                d.update({"light": ROOM["light"]} if mode == "json" else {"ldr": ROOM["ldr"]})
+                import json as _j
+                r = Resp(d); r.text = _j.dumps(d); return r
+            if mode == "html" and path == "/":
+                r = Resp(None); r.text = ("<html><body><h1>ESP32 sensors</h1><div>Temperature</div><div>21.2 \u00b0C</div>"
+                                          "<div>Humidity</div><div>71.8 %%</div><div>Light</div><div>%s</div></body></html>" % ROOM["light"])
+                return r
+            r = Resp(None); r.status_code = 404; r.text = "Not found"; return r
         if "generate_204" in url:
             r = Resp({}); r.status_code = 204; return r
         if "geocoding-api.open-meteo.com" in url:
