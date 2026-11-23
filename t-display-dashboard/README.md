@@ -90,11 +90,11 @@ The original grey look:
 
 ## Room sensors (second ESP32, optional)
 
-A second ESP32 on the same Wi-Fi with a DHT22, an LDR light sensor and a touch pad, serving its readings at `http://192.168.1.16` (change the address at **http://board:8080/room**). Every 30 s the LilyGO reads it: it tries the usual JSON addresses (`/data`, `/api`, `/json`, `/sensors`, ...) and falls back to reading the values off the board's page.
+A second ESP32 on the same Wi-Fi with a DHT22, an LDR light sensor and a touch pad, serving its readings at `http://192.168.1.16` (change the address at **http://board:8080/room**). Every 5 s the LilyGO reads it: it tries the usual JSON addresses (`/data`, `/api`, `/json`, `/sensors`, ...) and falls back to reading the values off the board's page.
 
 - **Weather screen:** the second line shows the room, e.g. *Room 21.2° 72%* (low/high moves onto the *Feels* line).
 - **Dark room:** when the light sensor says Dark, the LED ring becomes the night light (night-light colour and brightness), even in the day. Switch on the LED ring page. A number reading needs a rule on `/room`, e.g. `>3000`.
-- If the board stops answering, the LilyGO backs off (up to 10 minutes between tries) and the weather screen goes back to low/high.
+- If the board stops answering, the LilyGO backs off (10 s, 20 s, 40 s ... up to 5 minutes between tries) and the weather screen goes back to low/high.
 
 ![Weather screen with room readings](docs/weather-room.png)
 

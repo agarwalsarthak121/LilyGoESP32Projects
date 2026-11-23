@@ -4035,6 +4035,7 @@ def get_weather():
 # ---- room sensors: a second ESP32 on the network (DHT22 temperature/humidity, LDR, touch).
 # The weather screen shows the room's temperature and humidity; a dark room turns the LED
 # ring into a night light. Page: http://<board>:8080/room
+ROOM_EVERY = 5                 # seconds between readings
 ROOM_PATHS = ("/data", "/api", "/json", "/sensors", "/api/sensors", "/api/data", "/status", "/readings", "/sensor")
 wx_base = None               # (feels line, low/high line) as the weather update wrote them
 wx_nums = None               # (feels like, low, high)
@@ -4050,7 +4051,7 @@ def room_url():
 
 
 def room_fresh():
-    return room is not None and time.monotonic() - room["at"] < 180
+    return room is not None and time.monotonic() - room["at"] < 60
 
 
 def room_dark():
@@ -4151,7 +4152,7 @@ def _room_from_html(html):
 
 
 def _room_get(path):
-    with requests.get(room_url() + path, timeout=4) as resp:
+    with requests.get(room_url() + path, timeout=2) as resp:       # same Wi-Fi: answers in well under a second
         if resp.status_code != 200:
             return None
         body = resp.text[:6000]
@@ -4191,12 +4192,12 @@ def get_room():
         if r:
             r["at"] = time.monotonic()
             room, room_path, room_err, room_fails = r, p, "", 0
-            room_next = time.monotonic() + 30
+            room_next = time.monotonic() + ROOM_EVERY
             return
     room_err = last
     room_fails += 1
     room_path = None
-    room_next = time.monotonic() + min(600, 30 * (room_fails + 1))   # back off while it's away
+    room_next = time.monotonic() + min(300, ROOM_EVERY * 2 ** min(room_fails, 6))   # back off while it's away
 
 
 def wx_text():
@@ -8667,7 +8668,7 @@ while True:
                 _s.refresh()
 
         if now_m > room_next:
-            room_next = now_m + 30
+            room_next = now_m + ROOM_EVERY
             safe(get_room, "room", free=False)
             wx_text()
 
