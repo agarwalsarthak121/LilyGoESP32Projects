@@ -4053,17 +4053,42 @@ room_glast = None            # (gesture, monotonic time, "instant" / "check")
 room_gcount = {"single": 0, "double": 0, "long": 0}
 
 
+ROOM_ACTIONS = {"single": "Next screen", "double": "Previous screen", "long": "Auto-rotate on / off"}
+room_nav = None              # "next" / "prev": picked up by the main loop, like a KEY press
+
+
+def set_auto_rotate(on):
+    """Turn automatic screen changes on or off (same as the /rotate page), and remember it."""
+    global auto_rotate, last_switch
+    CFG["AUTO_ROTATE"] = "on" if on else "off"
+    try:
+        save_cfg()
+    except Exception as e:  # noqa: BLE001
+        log_err("auto-rotate save: %r" % (e,))
+    auto_rotate = bool(on) and SCREEN_SECONDS > 0
+    last_switch = time.monotonic()
+
+
 def room_gesture(g, seq, how):
-    """A touch gesture from the room board. For now: count it and blink the LED ring to confirm."""
-    global room_gseq, room_glast, led_fx
+    """A touch gesture from the room board: single = next screen, double = previous screen,
+    long = auto-rotate on/off. The LED ring blinks to confirm."""
+    global room_gseq, room_glast, led_fx, room_nav
     if seq is not None and seq == room_gseq:
         return                                   # already handled
     room_gseq = seq
     room_glast = (g, time.monotonic(), how)
     room_gcount[g] = room_gcount.get(g, 0) + 1
     log_err("room touch: %s (%s)" % (ROOM_GESTURES.get(g, g), how))
+    fx = "tap_" + g
+    if g == "single":
+        room_nav = "next"
+    elif g == "double":
+        room_nav = "prev"
+    elif g == "long":
+        set_auto_rotate(not auto_rotate)
+        fx = "rot_on" if auto_rotate else "rot_off"     # green glow = on, red glow = off
     if (cfg("LED_TAPFX") or "on") != "off":
-        led_fx = ("tap_" + g, time.monotonic())   # quick blink(s) on the ring so you see it arrived
+        led_fx = (fx, time.monotonic())           # quick blink(s) on the ring so you see it arrived
 
 
 def room_url():
@@ -5835,13 +5860,7 @@ def rotate_page(request: Request):
     global auto_rotate, last_switch
     on = request.query_params.get("on", safe=False)
     if on in ("0", "1"):
-        CFG["AUTO_ROTATE"] = "on" if on == "1" else "off"
-        try:
-            save_cfg()
-        except Exception:  # noqa: BLE001
-            pass
-        auto_rotate = on == "1" and SCREEN_SECONDS > 0
-        last_switch = time.monotonic()
+        set_auto_rotate(on == "1")
     msg = ("Auto-rotate is ON: screens change every %d s (the KEY button still works)." % SCREEN_SECONDS
            if auto_rotate else
            "Auto-rotate is OFF: screens change only when you press the KEY button.")
@@ -6513,6 +6532,9 @@ def room_page(request: Request):
                 room_gcount["single"], room_gcount["double"], room_gcount["long"])
         else:
             rows += "<p>No touch gestures yet. Tap, double-tap or hold the pad: the LED ring blinks when one arrives.</p>"
+        rows += "<p><small>%s. Auto-rotate is now <b>%s</b>.</small></p>" % (
+            " &middot; ".join("%s: %s" % (ROOM_GESTURES[k], ROOM_ACTIONS[k]) for k in ("single", "double", "long")),
+            "on" if auto_rotate else "off")
         if room["dark"] is None and room["light"] is not None:
             rows += ("<p>The light reading is a number, so tell the board which way is dark: e.g. "
                      "<b>&gt;3000</b> (dark when above 3000) or <b>&lt;20</b> (dark when below 20).</p>")
@@ -8420,7 +8442,8 @@ LED_EVENTS = (("WICKET", "Wicket: red flash"), ("PROFIT", "Profit bell: green sp
               ("HELLO", "Welcome back when you sit down"))
 LED_FX_SECS = {"wicket": 3.0, "profit": 3.0, "sl": 3.0, "target": 3.0, "break": 8.0, "hello": 2.0,
                "rainbow": 6.0, "party": 5.0, "police": 5.0, "heartbeat": 5.0, "sparkle": 5.0,
-               "nightlight": 10.0, "tap_single": 0.35, "tap_double": 0.7, "tap_long": 1.0}
+               "nightlight": 10.0, "tap_single": 0.35, "tap_double": 0.7, "tap_long": 1.0,
+               "rot_on": 1.2, "rot_off": 1.2}
 led_tw = []                  # twinkle / sparkle brightness per LED
 
 
@@ -8608,6 +8631,9 @@ def led_frame(now):
             return [(255, 255, 255)] * n if (t < 0.15 or 0.35 < t < 0.5) else [(0, 0, 0)] * n
         elif name == "tap_long":                        # a white glow that fades
             return [_scale((255, 255, 255), max(0.0, 1.0 - t))] * n
+        elif name in ("rot_on", "rot_off"):              # auto-rotate: green glow = on, red = off
+            c = (0, 255, 60) if name == "rot_on" else (255, 30, 0)
+            return [_scale(c, max(0.0, 1.0 - t / 1.2))] * n
     mode = cfg("LED_MODE") or "pnl"
     col = led_colour()
     if mode == "rainbow":
@@ -8864,6 +8890,14 @@ while True:
                 pres_wake(now_m)
                 switch = False
                 boot_was = False
+        back = False
+        if room_nav:                         # the room board's touch pad: next / previous screen
+            nav, room_nav = room_nav, None
+            pres_poke = now_m
+            if screen_asleep:
+                pres_wake(now_m)             # like the KEY button, the first tap only wakes the screen
+            else:
+                switch, back = True, nav == "prev"
         if switch:
             wake_until = now_m + 60
         if force_show:                       # "show" on the Settings page, or a screen turned off
@@ -8930,7 +8964,7 @@ while True:
             last_switch = now_m
             was_showing = None            # (re)entering a screen restarts its news count
             for _ in range(len(ORDER)):
-                screen = (screen + 1) % len(ORDER)
+                screen = (screen + (-1 if back else 1)) % len(ORDER)
                 name = ORDER[screen]
                 if switch:
                     break
