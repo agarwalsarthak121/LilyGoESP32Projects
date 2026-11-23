@@ -4044,6 +4044,7 @@ room_path = None             # where the readings were found
 room_err = ""
 room_fails = 0
 room_next = 0.0
+room_taps_new = 0            # taps seen since the LilyGO started
 
 
 def room_url():
@@ -4099,9 +4100,13 @@ def _dark_from(key, v):
 
 def _room_from_json(d):
     f = _flatten(d)
-    r = {"t": None, "h": None, "dark": None, "light": None, "touch": None}
+    r = {"t": None, "h": None, "dark": None, "light": None, "touch": None, "taps": None}
     for k, v in f.items():
         leaf = k.split(".")[-1]
+        if r["taps"] is None and leaf in ("taps", "tap_count", "touch_count", "touches", "count") \
+                and _num_or_none(v) is not None:
+            r["taps"] = int(_num_or_none(v))
+            continue
         if r["t"] is None and "temp" in leaf and _num_or_none(v) is not None and "unit" not in leaf \
                 and not leaf.endswith("_f") and "fahr" not in leaf:
             r["t"] = _num_or_none(v)
@@ -4191,6 +4196,10 @@ def get_room():
             break                                    # the board itself isn't answering: no point trying more
         if r:
             r["at"] = time.monotonic()
+            global room_taps_new
+            if r.get("taps") is not None and room is not None and room.get("taps") is not None:
+                d = r["taps"] - room["taps"]
+                room_taps_new += d if d > 0 else (r["taps"] if d < 0 else 0)   # < 0: the board restarted
             room, room_path, room_err, room_fails = r, p, "", 0
             room_next = time.monotonic() + ROOM_EVERY
             return
@@ -6447,7 +6456,10 @@ def room_page(request: Request):
                 "<tr><td>Light</td><td><b>%s</b> <small>(%s)</small></td></tr><tr><td>Touch</td><td>%s</td></tr></table>") % (
             "--" if room["t"] is None else "%.1f &deg;C" % room["t"],
             "--" if room["h"] is None else "%d %%" % round(room["h"]),
-            dark, esc(str(room["light"])), esc(str(room["touch"])))
+            dark, esc(str(room["light"])),
+            ("Touching now" if room["touch"] is True or str(room["touch"]).lower() in ("true", "1") else "Idle") +
+            ("" if room.get("taps") is None else " &middot; <b>%d</b> taps on the board (%d since the LilyGO started)" % (
+                room["taps"], room_taps_new)))
         if room["dark"] is None and room["light"] is not None:
             rows += ("<p>The light reading is a number, so tell the board which way is dark: e.g. "
                      "<b>&gt;3000</b> (dark when above 3000) or <b>&lt;20</b> (dark when below 20).</p>")
@@ -6464,7 +6476,10 @@ def room_page(request: Request):
         "becomes the night light (switch on the <a href='/leds'>LED ring</a> page).</small></p>"
         "<p><a href='/' style='background:#444'>Back</a></p>") % (
         esc(str(cfg("ROOM_URL") or "http://192.168.1.16")), esc(str(cfg("ROOM_DARK_RULE") or "")))
-    return Response(request, PAGE.replace("Zerodha login", "Room sensors") % (tip, body), content_type="text/html")
+    html = PAGE.replace("Zerodha login", "Room sensors") % (tip, body)
+    if q.get("url", safe=False) is None:                 # live: reload every 5 s (not right after saving)
+        html = html.replace("<head>", "<head><meta http-equiv='refresh' content='5'>", 1)
+    return Response(request, html, content_type="text/html")
 
 
 # ------------------------------------------------------------- LED ring page

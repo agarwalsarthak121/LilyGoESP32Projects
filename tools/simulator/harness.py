@@ -59,7 +59,8 @@ rtcm.RTC = RTC
 sys.modules["rtc"] = rtcm
 
 FAIL = os.environ.get("FAIL") == "1"
-ROOM = {"mode": os.environ.get("ROOM_MODE", "json"), "path": "/data", "light": "Bright", "ldr": 1200}
+ROOM = {"mode": os.environ.get("ROOM_MODE", "json"), "path": "/data", "light": "Bright", "ldr": 1200,
+        "touched": False, "taps": 4}
 class Resp:
     def __init__(self, d, raw=None, headers=None): self.d = d; self.raw = raw; self.status_code = 200; self.headers = headers or {}
     def iter_content(self, chunk_size=1024):
@@ -123,8 +124,11 @@ class Session:
             if mode == "down":
                 raise OSError(116, "ETIMEDOUT")
             if mode in ("json", "num") and path == ROOM["path"]:
-                d = {"temperature": 21.2, "humidity": 71.8, "touch": {"state": "idle", "count": 4}, "uptime": 462}
-                d.update({"light": ROOM["light"]} if mode == "json" else {"ldr": ROOM["ldr"]})
+                if mode == "json":                         # the format of the real room board (/data)
+                    d = {"temp": 21.2, "hum": 71.8, "dark": ROOM["light"] == "Dark", "touched": ROOM["touched"],
+                         "taps": ROOM["taps"], "led": False, "uptime": 462, "rssi": -56}
+                else:
+                    d = {"temperature": 21.2, "humidity": 71.8, "ldr": ROOM["ldr"]}
                 import json as _j
                 r = Resp(d); r.text = _j.dumps(d); return r
             if mode == "html" and path == "/":
